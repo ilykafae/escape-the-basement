@@ -8,7 +8,7 @@ GAME_H = 435
 V_GAME_W = 2550
 V_GAME_H = 1450
 
-USE_FOG_OF_WAR = True
+USE_FOG_OF_WAR = False
 
 GHOST_PATH = "assets/sprite/ghost.jpg"
 WALL_PATH = "assets/world/wall.png"
@@ -45,7 +45,7 @@ async def main():
     ghost_x = 0
     ghost_y = 0
 
-    total_buttons = 50
+    total_buttons = 25
     preseed_buttons = 0
 
     exit_x = 0
@@ -181,7 +181,7 @@ async def main():
                             components[Position].x = next_x
                     except IndexError:
                         pass
-                elif event.key == pygame.K_SPACE:
+                elif event.key == pygame.K_h:
                     x = components[Position].x // WALL_OFFSET
                     y = components[Position].y // WALL_OFFSET
 
