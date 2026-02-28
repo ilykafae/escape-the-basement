@@ -15,11 +15,14 @@ class RenderSystem:
         self.screen = screen
     
     def render(self, em):
-        self.screen.fill((0, 0, 0))
+        self.screen.fill((255, 255, 255))
 
         for entity, components in em.get_entities(Position, Renderable):
             pos = components[Position]
             ren = components[Renderable]
-            self.screen.blit(ren.surface, (pos.x, pox.y))
+
+            scaled_surface = pygame.transform.smoothscale(ren.surface, (ren.scaled_x, ren.scaled_y))
+
+            self.screen.blit(scaled_surface, (pos.x, pos.y))
 
         pygame.display.flip()
