@@ -11,18 +11,13 @@ class VelocitySystem:
             pos.y = vel.dy * dt
 
 class RenderSystem:
-    def __init__(self, screen):
-        self.screen = screen
+    def __init__(self, surface):
+        self.surface = surface
     
     def render(self, em):
-        self.screen.fill((255, 255, 255))
+        self.surface.fill((0, 0, 0))
 
         for entity, components in em.get_entities(Position, Renderable):
             pos = components[Position]
             ren = components[Renderable]
-
-            scaled_surface = pygame.transform.smoothscale(ren.surface, (ren.scaled_x, ren.scaled_y))
-
-            self.screen.blit(scaled_surface, (pos.x, pos.y))
-
-        pygame.display.flip()
+            self.surface.blit(ren.surface, (pos.x, pos.y))

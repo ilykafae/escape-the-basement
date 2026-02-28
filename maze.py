@@ -374,7 +374,7 @@ def generate_maze_with_spawns(
     # Place buttons on random floor tiles.
     _place_buttons(tiles, rng, button_count)
 
-    return tiles, player_spawn, exit_spawn
+    return tiles
 
 
 def generate_maze(
