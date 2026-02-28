@@ -13,5 +13,5 @@ class EntityManager:
 
     def get_entities(self, *qtype):
         for entity_id, components in self.entities.items():
-            if all(ctype in components for comp_type in qtype):
+            if all(comp_type in components for comp_type in qtype):
                 yield entity_id, components
