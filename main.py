@@ -1,3 +1,5 @@
+# pygbag: width=1280, height=720
+
 import pygame, asyncio, maze, random
 from ecs.system import *
 
@@ -5,6 +7,8 @@ GAME_W = 765
 GAME_H = 435
 V_GAME_W = 2550
 V_GAME_H = 1450
+
+USE_FOG_OF_WAR = True
 
 GHOST_PATH = "assets/sprite/ghost.jpg"
 WALL_PATH = "assets/world/wall.png"
@@ -16,6 +20,8 @@ LOCKED_DOOR_PATH = "assets/doors/locked_door.png"
 BUTTON_PATH = "assets/world/button.png"
 BUTTON_PRESSED_PATH = "assets/world/button_pressed.png"
 PLAYER_PATH = "assets/sprite/char.png"
+PLAYER_RIGHT_PATH = "assets/sprite/char_right.png"
+PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
 
@@ -28,7 +34,7 @@ async def main():
     pygame.font.init()
 
     global font
-    font = pygame.font.Font(FONT_PATH, 150)
+    font = pygame.font.Font(FONT_PATH, 75)
 
     # game settings
     is_door_unlocked = True
@@ -97,9 +103,9 @@ async def main():
                 player_x = icol * WALL_OFFSET
                 player_y = irow * WALL_OFFSET
             elif tile == 3:
-                surface = pygame.image.load(BUTTON_PATH)
+                surface = pygame.image.load(BUTTON_PATH).convert_alpha()
             elif tile == 4:
-                surface = pygame.image.load(BUTTON_PRESSED_PATH)
+                surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
             else:
                 surface = pygame.image.load(FLOOR_PATH).convert_alpha()
             
@@ -175,12 +181,12 @@ async def main():
                             components[Position].x = next_x
                     except IndexError:
                         pass
-                elif event.key == pygame.K_e:
+                elif event.key == pygame.K_SPACE:
                     x = components[Position].x // WALL_OFFSET
                     y = components[Position].y // WALL_OFFSET
 
                     if mz[y][x] == 3:
-                        mz[y][x] == 4
+                        mz[y][x] = 4
 
                         components = em.entities[mz_entities[y][x]]
                         components[Renderable].surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
@@ -205,11 +211,11 @@ async def main():
         mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
 
         fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
-        virtual_surface.fill((0, 0, 0))
 
         ren_sys.render(em)
 
-        virtual_surface.blit(fog_surface, (0, 0))
+        if USE_FOG_OF_WAR:
+            virtual_surface.blit(fog_surface, (0, 0))
 
         if active_msg:
             still_active = draw_timed_text(virtual_surface, active_msg, msg_start_time, 3000)
@@ -229,7 +235,7 @@ def draw_timed_text(surface, text, start_ticks, duration_ms):
     if pygame.time.get_ticks() - start_ticks < duration_ms:
         text_surf = font.render(text, True, (255, 0, 0)) 
 
-        text_rect = text_surf.get_rect(center=(V_GAME_W // 2, V_GAME_H // 6))
+        text_rect = text_surf.get_rect(center=(V_GAME_W // 2, V_GAME_H // 10))
         
         surface.blit(text_surf, text_rect)
         return True
