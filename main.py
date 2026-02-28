@@ -16,6 +16,8 @@ FLOOR_PATH = "assets/world/floor.png"
 B_FLOOR_PATH = "assets/world/floor_with_blood.png"
 DOOR_PATH = "assets/doors/door.png"
 LOCKED_DOOR_PATH = "assets/doors/locked_door.png"
+BUTTON_PATH = "assets/world/button.png"
+BUTTON_PRESSED_PATH = "assets/world/button_pressed.png"
 
 WALL_OFFSET = 50
 
@@ -51,9 +53,6 @@ async def main():
                 else:
                     surface = pygame.image.load(WALL_PATH).convert_alpha()
             elif tile == 0:
-                if ttype == 0:
-                    surface = pygame.image.load(B_FLOOR_PATH).convert_alpha()
-                else:
                     surface = pygame.image.load(FLOOR_PATH).convert_alpha()
             elif tile == -1:
                 if is_door_unlocked:
@@ -64,6 +63,8 @@ async def main():
                 surface = pygame.image.load(FLOOR_PATH).convert_alpha()
                 player_x = irow
                 player_y = icol
+            elif tile == 3:
+                surface = pygame.image.load(BUTTON_PATH)
             else:
                 surface = pygame.image.load(FLOOR_PATH).convert_alpha()
             
