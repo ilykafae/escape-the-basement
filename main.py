@@ -35,7 +35,7 @@ async def main():
     #em.add_component(ghost_id, Position(1, 1))
     #em.add_component(ghost_id, Renderable(pygame.image.load(GHOST_SPIRTE_PATH).convert_alpha(), 50, 50))
 
-    mz = maze.generate_maze(GAME_W // WALL_OFFSET, GAME_H // WALL_OFFSET, 1, 10)
+    mz = maze.generate_maze(GAME_W // WALL_OFFSET, GAME_H // WALL_OFFSET, 10, 10)
 
     print(mz)
     print([[1, 0], [0, 1]])
