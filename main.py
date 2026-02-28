@@ -8,7 +8,7 @@ GAME_H = 435
 V_GAME_W = 2550
 V_GAME_H = 1450
 
-USE_FOG_OF_WAR = False
+USE_FOG_OF_WAR = True
 
 GHOST_PATH = "assets/sprite/ghost.jpg"
 WALL_PATH = "assets/world/wall.png"
@@ -25,6 +25,8 @@ PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
 
+BGM_PATH = "assets/audio/bgm.mp3"
+
 WALL_OFFSET = 50
 
 font = None
@@ -32,6 +34,9 @@ font = None
 async def main():
     pygame.init()
     pygame.font.init()
+    pygame.mixer.init()
+
+    bgm = pygame.mixer.music.load(BGM_PATH)
 
     global font
     font = pygame.font.Font(FONT_PATH, 75)
@@ -55,7 +60,7 @@ async def main():
     msg_start_time = 0
 
     fog_surface = pygame.Surface((V_GAME_W, V_GAME_H), pygame.SRCALPHA)
-    light_rad = 200
+    light_rad = 350
 
     light_mask = pygame.Surface((light_rad * 2, light_rad * 2), pygame.SRCALPHA)
     light_mask.fill((0, 0, 0, 255)) 
@@ -127,6 +132,8 @@ async def main():
     em.add_component(player, Position(player_x, player_y))
     em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
 
+    # play bgm
+    pygame.mixer.music.play(-1)
 
     # main loop
     while True:
