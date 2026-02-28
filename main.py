@@ -1,5 +1,3 @@
-# pygbag: width=1280, height=720
-
 import pygame, asyncio, maze, random
 from ecs.system import *
 
@@ -25,7 +23,7 @@ PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
 
-BGM_PATH = "assets/audio/bgm.mp3"
+BGM_PATH = "assets/audio/bgm.ogg"
 
 WALL_OFFSET = 50
 
@@ -144,7 +142,7 @@ async def main():
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_UP:
+                if event.key == pygame.K_w:
                     components = em.entities[player]
 
                     next_x = components[Position].x
@@ -155,7 +153,7 @@ async def main():
                             components[Position].y = next_y
                     except IndexError:
                         pass
-                elif event.key == pygame.K_DOWN:
+                elif event.key == pygame.K_s:
                     components = em.entities[player]
 
                     next_x = components[Position].x
@@ -166,7 +164,7 @@ async def main():
                             components[Position].y = next_y
                     except IndexError:
                         pass
-                elif event.key == pygame.K_RIGHT:
+                elif event.key == pygame.K_d:
                     components = em.entities[player]
 
                     next_x = components[Position].x + WALL_OFFSET
@@ -177,7 +175,7 @@ async def main():
                             components[Position].x = next_x
                     except IndexError:
                         pass
-                elif event.key == pygame.K_LEFT:
+                elif event.key == pygame.K_a:
                     components = em.entities[player]
 
                     next_x = components[Position].x - WALL_OFFSET
@@ -188,7 +186,7 @@ async def main():
                             components[Position].x = next_x
                     except IndexError:
                         pass
-                elif event.key == pygame.K_h:
+                elif event.key == pygame.K_f:
                     x = components[Position].x // WALL_OFFSET
                     y = components[Position].y // WALL_OFFSET
 
