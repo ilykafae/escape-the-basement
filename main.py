@@ -1,4 +1,3 @@
-# pygbag: width=1280, height=720
 
 import pygame, asyncio, maze, random, math
 from collections import deque
@@ -10,7 +9,6 @@ GAME_H = 435
 V_GAME_W = 2550
 V_GAME_H = 1450
 
-# Make asset paths robust (works no matter where you run `python main.py` from)
 BASE_DIR = Path(__file__).resolve().parent
 
 def asset_path(rel: str) -> str:
@@ -18,10 +16,10 @@ def asset_path(rel: str) -> str:
 
 
 USE_FOG_OF_WAR = True
+USE_SMOOTH_MOVEMENT = True
+PLAYER_STEP_MS = 120
 
-# =========================
-# TUNABLE SETTINGS (edit here)
-# =========================
+# Tunable settings
 
 # Tile size in pixels
 TILE_SIZE = 50
@@ -30,23 +28,18 @@ TILE_SIZE = 50
 MOVE_INITIAL_DELAY_MS = 200
 MOVE_REPEAT_MS = 90
 
-# Buttons
 TOTAL_BUTTONS = 25
 
-# Fog-of-war: when enabled, player vision radius = LOCK_RADIUS * TILE_SIZE
 FOG_RADIUS_MATCH_LOCK = True
 
-# Ghost movement timing (ms per tile step)
-GHOST_STEP_NORMAL_MS = 250
-GHOST_STEP_RAGE_MS = 210
+GHOST_STEP_NORMAL_MS = 220
+GHOST_STEP_RAGE_MS = 180
 
-# Lock (acquire) radius in tiles
-LOCK_RADIUS = 5
+LOCK_RADIUS = 6
+VISION_RADIUS = 6  # tiles (player vision radius when fog-of-war is on)
 
-# Unlock (de-target) radius in tiles (hysteresis)
-UNLOCK_RADIUS = 9
+UNLOCK_RADIUS = 10
 
-# Jumpscare visuals
 JUMPSCARE_VISUAL_MS = 1000
 JUMPSCARE_COOLDOWN_MS = 6000
 
@@ -74,11 +67,11 @@ PLAYER_PATH = "assets/sprite/char.png"
 PLAYER_RIGHT_PATH = "assets/sprite/char_right.png"
 PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
-BGM_PATH = asset_path("assets/audio/bgm.mp3")
-HEARTBEAT_PATH = asset_path("assets/audio/heartbeat.mp3")
-JUMPSCARE_AUDIO_PATH = asset_path("assets/audio/jumpscare_scream.mp3")
+BGM_PATH = asset_path("assets/audio/bgm.ogg")
+HEARTBEAT_PATH = asset_path("assets/audio/heartbeat.ogg")
+JUMPSCARE_AUDIO_PATH = asset_path("assets/audio/jumpscare_scream.ogg")
 
-# Your repo has had multiple spellings/cases for this file. We'll try a few.
+# try common jumpscare filename variants
 JUMPSCARE_IMG_CANDIDATES = [
     asset_path("assets/sprite/jumpscar.JPG"),
     asset_path("assets/sprite/jumpscar.jpg"),
@@ -95,9 +88,7 @@ WALL_OFFSET = TILE_SIZE
 font = None
 
 async def main():
-    # =========================
     # Hold-to-move (arrow keys)
-    # =========================
     held_dir = (0, 0)            # (dx_tiles, dy_tiles)
     next_move_time = 0
 
@@ -114,6 +105,46 @@ async def main():
         except IndexError:
             pass
         return False
+
+    # Smooth movement (optional)
+    player_target = None  # (x_px, y_px) or None
+    player_step_ms = PLAYER_STEP_MS   # ms per tile for smooth movement
+
+    def update_player_smooth(dt: float):
+        nonlocal player_target
+        p = em.entities[player][Position]
+
+        if player_target is None:
+            dx, dy = held_dir
+            if dx == 0 and dy == 0:
+                return
+
+            tx = int((p.x + WALL_OFFSET / 2) // WALL_OFFSET)
+            ty = int((p.y + WALL_OFFSET / 2) // WALL_OFFSET)
+            ntx, nty = tx + dx, ty + dy
+
+            if 0 <= nty < len(mz) and 0 <= ntx < len(mz[0]) and mz[nty][ntx] != 1:
+                player_target = (ntx * WALL_OFFSET, nty * WALL_OFFSET)
+            return
+
+        tx, ty = player_target
+        vx = tx - p.x
+        vy = ty - p.y
+        dist2 = vx * vx + vy * vy
+
+        speed_px = WALL_OFFSET * 1000.0 / max(1.0, float(player_step_ms))
+        step = speed_px * dt
+
+        if dist2 <= step * step:
+            p.x, p.y = tx, ty
+            player_target = None
+            return
+
+        dist = math.sqrt(dist2)
+        if dist > 1e-6:
+            p.x += (vx / dist) * step
+            p.y += (vy / dist) * step
+
     pygame.init()
     pygame.font.init()
     pygame.mixer.init()
@@ -141,7 +172,7 @@ async def main():
 
     fog_surface = pygame.Surface((V_GAME_W, V_GAME_H), pygame.SRCALPHA)
 
-    # 先給一個預設值；之後會在 Ghost AI 參數出現後（TARGET_RADIUS_NORMAL）重建一次
+    # Temporary default; rebuilt later after ghost/vision parameters are set
     light_rad = 200
 
     def build_light_mask(radius_px: int) -> pygame.Surface:
@@ -161,6 +192,10 @@ async def main():
     virtual_surface = pygame.Surface((V_GAME_W, V_GAME_H))
 
     clock = pygame.time.Clock()
+
+    # Preload frequently-used UI/interaction sprites so keypresses can't crash on file load
+    IMG_BUTTON_PRESSED = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
+    IMG_DOOR = pygame.image.load(DOOR_PATH).convert_alpha()
 
     # --- audio setup ---
     try:
@@ -185,16 +220,14 @@ async def main():
     except Exception:
         jumpscare_snd = None
 
-    # Reserve channels so SFX don't fight
     heartbeat_channel = pygame.mixer.Channel(1)
     jumpscare_channel = pygame.mixer.Channel(2)
 
-    # --- jumpscare visuals ---
+    # jumpscare visuals (audio length unchanged)
     jumpscare_img = None
     for p in JUMPSCARE_IMG_CANDIDATES:
         try:
             if Path(p).exists():
-                # JPG has no alpha channel; convert() is fine, but convert_alpha() also works.
                 jumpscare_img = pygame.image.load(p).convert_alpha()
                 break
         except Exception:
@@ -203,9 +236,6 @@ async def main():
     jumpscare_active = False
     jumpscare_start_ms = 0
 
-    # Jumpscare visual timing
-    # 需求：圖片只保留 1.0 秒（不做淡出），之後直接消失。
-    # 音效照常播放，不受這裡影響。
     jumpscare_duration_ms = JUMPSCARE_VISUAL_MS
     jumpscare_fade_start_ms = JUMPSCARE_VISUAL_MS
     jumpscare_fade_end_ms = JUMPSCARE_VISUAL_MS
@@ -329,7 +359,13 @@ async def main():
                     q.append((nx, ny))
 
         # pick farthest tile (avoid player spawn and door tile if possible)
-        avoid = {(player_x // WALL_OFFSET, player_y // WALL_OFFSET), (exit_x, exit_y)}
+        avoid = {
+            (
+                int((player_x + (WALL_OFFSET / 2)) // WALL_OFFSET),
+                int((player_y + (WALL_OFFSET / 2)) // WALL_OFFSET),
+            ),
+            (exit_x, exit_y),
+        }
         best = (start_tx, start_ty)
         bestd = -1
         for yy in range(H):
@@ -360,8 +396,8 @@ async def main():
 
         return best
 
-    g1_tx = ghost_x // WALL_OFFSET
-    g1_ty = ghost_y // WALL_OFFSET
+    g1_tx = int((ghost_x + (WALL_OFFSET / 2)) // WALL_OFFSET)
+    g1_ty = int((ghost_y + (WALL_OFFSET / 2)) // WALL_OFFSET)
     g2_tx, g2_ty = find_farthest_walkable_from(g1_tx, g1_ty)
 
     ghost2_x = g2_tx * WALL_OFFSET
@@ -375,10 +411,14 @@ async def main():
     em.add_component(player, Position(player_x, player_y))
     em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
 
+    # play bgm (already started in the audio setup try-block)
+    try:
+        if not pygame.mixer.music.get_busy():
+            pygame.mixer.music.play(-1)
+    except Exception:
+        pass
 
-    # =========================
     # Ghost AI (normal / rage)
-    # =========================
 
     rage_mode = False
     rage_target_tile = None  # (tx, ty) snapshot at rage start
@@ -387,12 +427,8 @@ async def main():
     TARGET_RADIUS_NORMAL = LOCK_RADIUS
     TARGET_RADIUS_RAGE = LOCK_RADIUS
 
-    # =========================
-    # Fog-of-war: 視野半徑跟鎖定距離一致
-    # =========================
-    # 需求：關燈模式下，玩家視野（像素） = 鎖定距離（tile） * WALL_OFFSET
     if USE_FOG_OF_WAR and FOG_RADIUS_MATCH_LOCK:
-        light_rad = LOCK_RADIUS * TILE_SIZE
+        light_rad = VISION_RADIUS * TILE_SIZE
         light_mask = build_light_mask(light_rad)
 
     ghost_next_step_ms = 0
@@ -400,9 +436,49 @@ async def main():
 
     ghost_targeting = False
 
+    ghost_slide = {
+        ghost: {"moving": False, "target": (0.0, 0.0)},
+        ghost2: {"moving": False, "target": (0.0, 0.0)},
+    }
+
+    def start_ghost_slide(eid: int, next_tile: tuple[int, int]) -> None:
+        st = ghost_slide[eid]
+        if st["moving"]:
+            return
+        ntx, nty = next_tile
+        st["moving"] = True
+        st["target"] = (float(ntx * WALL_OFFSET), float(nty * WALL_OFFSET))
+
+    def update_ghost_slide(eid: int, dt: float, step_ms: int) -> None:
+        st = ghost_slide[eid]
+        if not st["moving"]:
+            return
+        p = em.entities[eid][Position]
+        tx, ty = st["target"]
+        vx = tx - p.x
+        vy = ty - p.y
+        dist2 = vx * vx + vy * vy
+
+        speed_px = WALL_OFFSET * 1000.0 / max(1.0, float(step_ms))
+        step = speed_px * dt
+
+        if dist2 <= step * step:
+            p.x = tx
+            p.y = ty
+            st["moving"] = False
+            return
+
+        dist = math.sqrt(dist2)
+        if dist > 1e-6:
+            p.x += (vx / dist) * step
+            p.y += (vy / dist) * step
+
     def tile_of_entity(eid: int) -> tuple[int, int]:
         p = em.entities[eid][Position]
-        return (p.x // WALL_OFFSET, p.y // WALL_OFFSET)  # (tx, ty)
+        return (
+            int((p.x + (WALL_OFFSET / 2)) // WALL_OFFSET),
+            int((p.y + (WALL_OFFSET / 2)) // WALL_OFFSET),
+        )
 
     def set_entity_tile(eid: int, tx: int, ty: int) -> None:
         em.entities[eid][Position].x = tx * WALL_OFFSET
@@ -413,7 +489,6 @@ async def main():
             return False
         return mz[ty][tx] != 1
 
-    # Precompute walkable tiles for roaming targets (so roaming can pick a far goal)
     walkable_tiles = [(x, y) for y, row in enumerate(mz) for x, v in enumerate(row) if v != 1]
 
     def manhattan(a: tuple[int,int], b: tuple[int,int]) -> int:
@@ -423,11 +498,9 @@ async def main():
     last_known_player_tile = None  # (tx, ty)
 
     def has_los(a: tuple[int,int], b: tuple[int,int]) -> bool:
-        """Very simple LOS: only same row or same column with no walls between.
-        Turning a corner breaks LOS, which matches your design.
-        """
-        ax, ay = a
-        bx, by = b
+        """LOS only for same row/col with no walls."""
+        ax, ay = int(a[0]), int(a[1])
+        bx, by = int(b[0]), int(b[1])
 
         if ax == bx:
             # same column, scan y
@@ -512,19 +585,12 @@ async def main():
             cur = prev[cur]
         return cur if prev[cur] == start else None
 
-    # =========================
-    # Pac-Man style roaming (scatter)
-    # =========================
-    # 參考 Pac-Man 鬼的行為：
-    # - 每隻鬼有一個「角落目標點」（scatter target）
-    # - 每一步在路口選擇會讓自己更接近目標的方向
-    # - 盡量不走回頭路（除非被迫）
-    # - tie 隨機打破，避免像機器人
+    # roaming: pacman-style scatter
 
     W_TILES = len(mz[0])
     H_TILES = len(mz)
 
-    # 四個角落（保守一點避開邊界，避免卡牆）
+    # Four corner targets (kept inside the border to avoid sticking to walls)
     corners = [
         (1, 1),
         (W_TILES - 2, 1),
@@ -532,18 +598,18 @@ async def main():
         (W_TILES - 2, H_TILES - 2),
     ]
 
-    # 每隻鬼的 scatter 角落不同（像 Pac-Man）
+    # Each ghost uses a different scatter corner (Pac-Man style)
     scatter_index = {ghost: 1, ghost2: 2}
 
-    # 記住上一個移動方向（避免來回抖）
+    # Remember last move direction (avoids back-and-forth jitter)
     roam_dir = {ghost: (0, 0), ghost2: (0, 0)}  # eid -> (dx, dy)
 
     def next_scatter_goal(eid: int) -> tuple[int, int]:
         idx = scatter_index.get(eid, 0)
-        # 找到下一個可走角落（如果角落剛好是牆，就往內縮）
+        # Pick the next corner goal; if it is blocked, nudge inward
         gx, gy = corners[idx % 4]
         if not is_walkable_tile(gx, gy):
-            # 往內縮一格試試
+            # Try nudging inward
             gx = max(1, min(W_TILES - 2, gx))
             gy = max(1, min(H_TILES - 2, gy))
         return (gx, gy)
@@ -552,7 +618,7 @@ async def main():
         scatter_index[eid] = (scatter_index.get(eid, 0) + 1) % 4
 
     def pacman_roam_step(eid: int, start: tuple[int, int]) -> tuple[int, int] | None:
-        """Pac-Man 式漫遊：朝角落目標走，路口選最接近目標的方向，盡量不回頭。"""
+        """Pac-Man style roaming: head toward a corner target, pick the move that gets closer, avoid reversing."""
         x, y = start
 
         goal = next_scatter_goal(eid)
@@ -563,7 +629,7 @@ async def main():
         last_dx, last_dy = roam_dir.get(eid, (0, 0))
         reverse = (-last_dx, -last_dy)
 
-        # 收集合法鄰居
+        # Collect legal neighbor moves
         moves = []  # (nx, ny, dx, dy)
         for dx, dy in ((0, -1), (-1, 0), (0, 1), (1, 0)):
             nx, ny = x + dx, y + dy
@@ -573,14 +639,14 @@ async def main():
         if not moves:
             return None
 
-        # Pac-Man 規則：如果有其他選擇，就避免回頭
+        # Pac-Man rule: avoid reversing unless forced
         filtered = moves
         if reverse != (0, 0) and len(moves) > 1:
             filtered = [m for m in moves if (m[2], m[3]) != reverse]
             if not filtered:
                 filtered = moves
 
-        # 選擇讓自己更接近目標的方向（Manhattan 距離最小）
+        # Choose the move that minimizes Manhattan distance to the goal
         bestd = 10**9
         best = []
         for nx, ny, dx, dy in filtered:
@@ -630,47 +696,62 @@ async def main():
 
     # main loop
     while True:
+        dt = clock.tick(60) / 1000.0
+        # Cap dt to avoid snapping if the window stalls for a moment
+        if dt > 0.05:
+            dt = 0.05
         for event in pygame.event.get():
-            if event == pygame.QUIT:
+            if event.type == pygame.QUIT:
                 return
 
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
             elif event.type == pygame.KEYDOWN:
+                # Always reference the player's components here (prevents NameError/UnboundLocalError for non-arrow keys)
+                components = em.entities[player]
+
                 if event.key == pygame.K_UP:
                     held_dir = (0, -1)
-                    move_player_by_tiles(0, -1)
-                    now = pygame.time.get_ticks()
-                    next_move_time = now + MOVE_INITIAL_DELAY_MS
+                    if not USE_SMOOTH_MOVEMENT:
+                        move_player_by_tiles(0, -1)
+                        now = pygame.time.get_ticks()
+                        next_move_time = now + MOVE_INITIAL_DELAY_MS
                 elif event.key == pygame.K_DOWN:
                     held_dir = (0, 1)
-                    move_player_by_tiles(0, 1)
-                    now = pygame.time.get_ticks()
-                    next_move_time = now + MOVE_INITIAL_DELAY_MS
+                    if not USE_SMOOTH_MOVEMENT:
+                        move_player_by_tiles(0, 1)
+                        now = pygame.time.get_ticks()
+                        next_move_time = now + MOVE_INITIAL_DELAY_MS
                 elif event.key == pygame.K_RIGHT:
                     held_dir = (1, 0)
-                    move_player_by_tiles(1, 0)
-                    now = pygame.time.get_ticks()
-                    next_move_time = now + MOVE_INITIAL_DELAY_MS
+                    if not USE_SMOOTH_MOVEMENT:
+                        move_player_by_tiles(1, 0)
+                        now = pygame.time.get_ticks()
+                        next_move_time = now + MOVE_INITIAL_DELAY_MS
                 elif event.key == pygame.K_LEFT:
                     held_dir = (-1, 0)
-                    move_player_by_tiles(-1, 0)
-                    now = pygame.time.get_ticks()
-                    next_move_time = now + MOVE_INITIAL_DELAY_MS
+                    if not USE_SMOOTH_MOVEMENT:
+                        move_player_by_tiles(-1, 0)
+                        now = pygame.time.get_ticks()
+                        next_move_time = now + MOVE_INITIAL_DELAY_MS
                 elif event.key == pygame.K_h:
-                    x = components[Position].x // WALL_OFFSET
-                    y = components[Position].y // WALL_OFFSET
+                    x = int((components[Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
+                    y = int((components[Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
+
+                    # Safety: if somehow out of bounds, ignore instead of crashing and quitting
+                    if y < 0 or y >= len(mz) or x < 0 or x >= len(mz[0]):
+                        continue
 
                     if mz[y][x] == 3:
                         mz[y][x] = 4
 
-                        components = em.entities[mz_entities[y][x]]
-                        components[Renderable].surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
+                        tile_comp = em.entities[mz_entities[y][x]]
+                        tile_comp[Renderable].surface = IMG_BUTTON_PRESSED
                         preseed_buttons += 1
 
                         if preseed_buttons == total_buttons:
-                            components = em.entities[mz_entities[exit_y][exit_x]]
-                            components[Renderable].surface = pygame.image.load(DOOR_PATH).convert_alpha()
+                            door_comp = em.entities[mz_entities[exit_y][exit_x]]
+                            door_comp[Renderable].surface = IMG_DOOR
 
                             is_door_unlocked = False
 
@@ -684,8 +765,8 @@ async def main():
                     if preseed_buttons == total_buttons and not rage_mode:
                         rage_mode = True
                         # snapshot player location at rage start
-                        px_t = em.entities[player][Position].x // WALL_OFFSET
-                        py_t = em.entities[player][Position].y // WALL_OFFSET
+                        px_t = int((em.entities[player][Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
+                        py_t = int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         rage_target_tile = (px_t, py_t)
                         trigger_jumpscare()
             elif event.type == pygame.KEYUP:
@@ -700,13 +781,16 @@ async def main():
                 elif dx == -1 and event.key == pygame.K_LEFT:
                     held_dir = (0, 0)
         
-        # Continuous movement while holding an arrow key
-        if held_dir != (0, 0):
-            now = pygame.time.get_ticks()
-            if now >= next_move_time:
-                dx, dy = held_dir
-                move_player_by_tiles(dx, dy)
-                next_move_time = now + MOVE_REPEAT_MS
+        # Movement update
+        if USE_SMOOTH_MOVEMENT:
+            update_player_smooth(dt)
+        else:
+            if held_dir != (0, 0):
+                now = pygame.time.get_ticks()
+                if now >= next_move_time:
+                    dx, dy = held_dir
+                    move_player_by_tiles(dx, dy)
+                    next_move_time = now + MOVE_REPEAT_MS
 
         # =========================
         # Ghost update (movement + targeting + catch)
@@ -714,7 +798,10 @@ async def main():
         now_ms = pygame.time.get_ticks()
 
         # Determine current player target
-        player_tile = (em.entities[player][Position].x // WALL_OFFSET, em.entities[player][Position].y // WALL_OFFSET)
+        player_tile = (
+            int((em.entities[player][Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET),
+            int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET),
+        )
 
         # Choose target radius and step speed based on mode
         if rage_mode:
@@ -740,7 +827,7 @@ async def main():
 
         # Hysteresis:
         # - Acquire lock when within `radius` (5)
-        # - Keep lock until BOTH ghosts are farther than UNLOCK_RADIUS (8)
+        # - Keep lock until BOTH ghosts are farther than UNLOCK_RADIUS (9)
         if ghost_targeting:
             targeting_now = not (d1 > UNLOCK_RADIUS and d2 > UNLOCK_RADIUS)
         else:
@@ -762,7 +849,7 @@ async def main():
         set_targeting(targeting_now)
 
         # Move ghost1
-        if now_ms >= ghost_next_step_ms:
+        if now_ms >= ghost_next_step_ms and not ghost_slide[ghost]["moving"]:
             ghost_next_step_ms = now_ms + step_ms
             start = g1_tile
 
@@ -782,10 +869,10 @@ async def main():
                 nxt = pacman_roam_step(ghost, start)
 
             if nxt is not None:
-                set_entity_tile(ghost, nxt[0], nxt[1])
+                start_ghost_slide(ghost, nxt)
 
         # Move ghost2 (slightly desync so they don't stack)
-        if now_ms >= ghost2_next_step_ms:
+        if now_ms >= ghost2_next_step_ms and not ghost_slide[ghost2]["moving"]:
             ghost2_next_step_ms = now_ms + step_ms + 35
             start = g2_tile
 
@@ -805,7 +892,10 @@ async def main():
                 nxt = pacman_roam_step(ghost2, start)
 
             if nxt is not None:
-                set_entity_tile(ghost2, nxt[0], nxt[1])
+                start_ghost_slide(ghost2, nxt)
+
+        update_ghost_slide(ghost, dt, step_ms)
+        update_ghost_slide(ghost2, dt, step_ms)
 
         # If rage snapshot reached, switch to live chase
         if rage_mode and rage_target_tile is not None:
@@ -841,13 +931,11 @@ async def main():
             virtual_surface.blit(fog_surface, (0, 0))
 
         # Jumpscare overlay: player can still move, but essentially can't see
-        # 需求：圖片保持比例，但要「貼緊上下邊」（fit-to-height）。
-        # 左右全部塗黑，且黑邊/圖片都要跟著 alpha 淡出（1.5s -> 3.0s）。
+        # jumpscare overlay
         if jumpscare_active and jumpscare_img is not None:
             now_ms = pygame.time.get_ticks()
             a = jumpscare_alpha(now_ms)
             if a > 0:
-                # 先蓋一層全黑遮罩（同 alpha），確保完全看不到迷宮
                 cover = pygame.Surface((V_GAME_W, V_GAME_H))
                 cover.fill((0, 0, 0))
                 cover.set_alpha(a)
@@ -855,15 +943,10 @@ async def main():
 
                 iw, ih = jumpscare_img.get_size()
                 if iw > 0 and ih > 0:
-                    # Fit-to-height: make image height exactly V_GAME_H
                     scale = V_GAME_H / ih
                     nw, nh = int(iw * scale), V_GAME_H
-
-                    # Scale and ensure surface supports alpha blending
                     overlay = pygame.transform.smoothscale(jumpscare_img, (nw, nh)).convert_alpha()
                     overlay.set_alpha(a)
-
-                    # Center horizontally; crop automatically if it overflows
                     ox = (V_GAME_W - nw) // 2
                     virtual_surface.blit(overlay, (ox, 0))
 
@@ -878,7 +961,6 @@ async def main():
         screen.blit(scaled_surface, (0, 0))
         pygame.display.flip()
     
-        clock.tick(60)
         await asyncio.sleep(0)
 
 def draw_timed_text(surface, text, start_ticks, duration_ms):
