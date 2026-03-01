@@ -184,7 +184,7 @@ def _add_loops(tiles: List[List[int]], rng: random.Random, complexity: float | i
 
     # Heuristic: carve a fraction of candidates proportional to complexity.
     # The divisor keeps the maze from turning into an open field at modest values.
-    carve_count = int(len(candidates) * (c / 3.0))
+    carve_count = int(len(candidates) * (c / 1.6))
     carve_count = max(0, min(carve_count, len(candidates)))
 
     rng.shuffle(candidates)
@@ -193,12 +193,143 @@ def _add_loops(tiles: List[List[int]], rng: random.Random, complexity: float | i
         tiles[y][x] = 0
 
 
+# --- Helper to reduce dead-ends and increase branchiness ---
+def _reduce_dead_ends(tiles: List[List[int]], rng: random.Random, difficulty: int) -> None:
+    """Reduce the number of dead-ends by carving extra connections.
+
+    - The base DFS maze creates many dead-ends.
+    - For chase gameplay, more loops/branches are more fun.
+
+    Strategy:
+      For tiles that are walkable (tile != 1) and have only 1 walkable neighbor,
+      try to carve ONE adjacent wall that connects to an existing corridor.
+
+    This keeps the map connected (we only connect to an existing corridor) and
+    avoids creating isolated enclosed areas.
+    """
+
+    H, W_ = len(tiles), len(tiles[0])
+
+    def walkable(x: int, y: int) -> bool:
+        return 0 <= x < W_ and 0 <= y < H and tiles[y][x] != 1
+
+    def neighbor_count(x: int, y: int) -> int:
+        cnt = 0
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            if walkable(x + dx, y + dy):
+                cnt += 1
+        return cnt
+
+    # Map difficulty (1..100) -> c (0..1)
+    c = float(difficulty)
+    if 1.0 <= c <= 100.0:
+        c = (c - 1.0) / 99.0
+    c = max(0.0, min(1.0, c))
+
+    # How aggressively to remove dead-ends.
+    # More difficulty => more loopiness => fewer dead ends.
+    # 0.35 .. 0.85
+    remove_frac = 0.35 + 0.50 * c
+
+    # Collect initial dead-ends (exclude border to avoid carving outside)
+    dead_ends = []
+    for y in range(1, H - 1):
+        for x in range(1, W_ - 1):
+            if tiles[y][x] == 1:
+                continue
+            if neighbor_count(x, y) == 1:
+                dead_ends.append((x, y))
+
+    if not dead_ends:
+        return
+
+    rng.shuffle(dead_ends)
+    target = int(len(dead_ends) * remove_frac)
+    carved = 0
+
+    # Multiple passes because carving changes the dead-end set
+    passes = 0
+    while carved < target and passes < 4:
+        passes += 1
+        changed = False
+
+        for x, y in dead_ends:
+            if carved >= target:
+                break
+            if tiles[y][x] == 1:
+                continue
+            if neighbor_count(x, y) != 1:
+                continue
+
+            # Try to carve a wall adjacent to (x,y) that would connect to an existing corridor.
+            candidates = []
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                wx, wy = x + dx, y + dy
+                bx, by = x + 2 * dx, y + 2 * dy
+
+                # We only carve interior walls
+                if not (1 <= wx < W_ - 1 and 1 <= wy < H - 1):
+                    continue
+
+                # Wall between dead-end and another corridor two tiles away
+                if tiles[wy][wx] == 1 and walkable(bx, by):
+                    candidates.append((wx, wy))
+
+            if not candidates:
+                continue
+
+            wx, wy = rng.choice(candidates)
+            tiles[wy][wx] = 0
+            carved += 1
+            changed = True
+
+        if not changed:
+            break
+
+        # Recompute dead-ends for next pass
+        dead_ends = []
+        for y in range(1, H - 1):
+            for x in range(1, W_ - 1):
+                if tiles[y][x] == 1:
+                    continue
+                if neighbor_count(x, y) == 1:
+                    dead_ends.append((x, y))
+        rng.shuffle(dead_ends)
+
+
 def _random_floor_tile(tiles: List[List[int]], rng: random.Random) -> Tuple[int, int]:
     """Pick a random walkable tile (x, y)."""
     floors = [(x, y) for y, row in enumerate(tiles) for x, t in enumerate(row) if t != 1]
     if not floors:
         raise ValueError("Maze has no floor tiles (this should never happen).")
     return rng.choice(floors)
+
+
+# --- New helper: pick a random wall tile adjacent to a walkable tile ---
+def _random_reachable_wall_tile(tiles: List[List[int]], rng: random.Random) -> Tuple[int, int]:
+    """Pick a random wall tile (value 1) that is adjacent to at least one walkable tile.
+
+    This ensures the door is reachable once the wall becomes a door tile.
+    """
+    H, W_ = len(tiles), len(tiles[0])
+    candidates: List[Tuple[int, int]] = []
+
+    for y in range(1, H - 1):
+        for x in range(1, W_ - 1):
+            if tiles[y][x] != 1:
+                continue
+            # Adjacent to any walkable tile (not a wall)
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if tiles[ny][nx] != 1:
+                    candidates.append((x, y))
+                    break
+
+    if not candidates:
+        # Fallback: if somehow no interior wall qualifies, just pick any floor tile (least bad)
+        return _random_floor_tile(tiles, rng)
+
+    return rng.choice(candidates)
 
 
 def _place_buttons(tiles: List[List[int]], rng: random.Random, button_count: int) -> None:
@@ -300,6 +431,7 @@ def generate_maze_tiles(
     cells = _generate_cells(cells_w, cells_h, rng)
     tiles = _cells_to_tiles_exact(cells, out_w=out_w, out_h=out_h)
     _add_loops(tiles, rng, complexity)
+    _reduce_dead_ends(tiles, rng, complexity)
     return tiles
 
 
@@ -344,32 +476,18 @@ def generate_maze_with_spawns(
         tiles[0][x] = 0  # carve opening to outside
         player_spawn = (x, 0)
 
-    # Place the exit as an opening on the BOTTOM border, far from the entrance.
-    # First compute a distance map from the entrance.
-    dist = _bfs_dist(tiles, player_spawn)
-    bottom_y = out_h - 1
-    inner_bottom_y = out_h - 2
-
-    candidates_bottom = [x for x in range(1, out_w - 1) if tiles[inner_bottom_y][x] == 0]
-    if not candidates_bottom:
-        exit_spawn = _farthest_floor_tile(tiles, player_spawn, min_distance=min_exit_distance)
-    else:
-        # Prefer the bottom opening whose *inside tile* is farthest from the entrance.
-        bestx = candidates_bottom[0]
-        bestd = -1
-        for x in candidates_bottom:
-            d = dist[inner_bottom_y][x]
-            if d < 10**9 and d > bestd:
-                bestd = d
-                bestx = x
-        tiles[bottom_y][bestx] = 0  # carve opening to outside
-        exit_spawn = (bestx, bottom_y)
+    # Exit placement (simple/random): turn a random reachable wall into the door.
+    # If it spawns near the entrance, that's just luck.
+    exit_spawn = _random_reachable_wall_tile(tiles, rng)
 
     # Mark entrance/exit in the tile map for convenience.
     px, py = player_spawn
     ex, ey = exit_spawn
     tiles[py][px] = 2
     tiles[ey][ex] = -1
+
+    # Reduce dead-ends to increase branching (better for chase gameplay)
+    _reduce_dead_ends(tiles, rng, complexity)
 
     # Place buttons on random floor tiles.
     _place_buttons(tiles, rng, button_count)
