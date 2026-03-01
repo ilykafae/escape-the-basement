@@ -16,7 +16,7 @@ def asset_path(rel: str) -> str:
     return str(BASE_DIR / rel)
 
 
-USE_FOG_OF_WAR = False
+USE_FOG_OF_WAR = True
 USE_SMOOTH_MOVEMENT = True
 PLAYER_STEP_MS = 120
 
@@ -39,7 +39,14 @@ GHOST_STEP_RAGE_MS = 180
 LOCK_RADIUS = 6
 VISION_RADIUS = 6  # tiles (player vision radius when fog-of-war is on)
 
+
 UNLOCK_RADIUS = 10
+
+# Hide bar
+HIDE_BAR_MAX = 3.0
+HIDE_BAR_WIDTH_PAD = 5
+HIDE_BAR_HEIGHT = 6
+HIDE_BAR_Y_OFFSET = -18
 
 JUMPSCARE_VISUAL_MS = 1000
 JUMPSCARE_COOLDOWN_MS = 6000
@@ -179,7 +186,7 @@ async def main():
     exit_x = 0
     exit_y = 0
 
-    hide_bar_max = 3.0
+    hide_bar_max = HIDE_BAR_MAX
     hide_bar_curent = hide_bar_max
     hiden_tick = 0
     is_hidden = False
@@ -719,7 +726,9 @@ async def main():
             except Exception:
                 pass
 
-    scene = WIN_SCENE_STR
+    scene = MENU_SCENE_STR
+    js_scene_start_ms = 0
+    js_scene_length_ms = jumpscare_duration_ms  # reuse the visual duration
 
     WHITE = (255, 255, 255)
     GREY = (150, 150, 150)
@@ -760,6 +769,7 @@ async def main():
 
             screen.blit(pygame.transform.scale(virtual_surface, (curr_screen_w, curr_screen_h)), (0, 0))
             pygame.display.flip()
+            continue
 
         elif scene == WIN_SCENE_STR:
             mouse_x, mouse_y = pygame.mouse.get_pos()
@@ -781,10 +791,46 @@ async def main():
 
             screen.blit(pygame.transform.scale(virtual_surface, (curr_screen_w, curr_screen_h)), (0, 0))
             pygame.display.flip()
+            continue
 
 
         elif scene == JS_SCENE_STR:
-            pass
+            # Show jumpscare overlay for a short time, then return to menu
+            now_ms = pygame.time.get_ticks()
+
+            # Render world (optional background)
+            ren_sys.render(em)
+
+            # Full black cover + jumpscare image
+            if jumpscare_img is not None:
+                cover = pygame.Surface((V_GAME_W, V_GAME_H))
+                cover.fill((0, 0, 0))
+                virtual_surface.blit(cover, (0, 0))
+
+                iw, ih = jumpscare_img.get_size()
+                if iw > 0 and ih > 0:
+                    scale = V_GAME_H / ih
+                    nw, nh = int(iw * scale), V_GAME_H
+                    overlay = pygame.transform.smoothscale(jumpscare_img, (nw, nh)).convert_alpha()
+                    ox = (V_GAME_W - nw) // 2
+                    virtual_surface.blit(overlay, (ox, 0))
+
+            curr_screen_w, curr_screen_h = screen.get_size()
+            screen.blit(pygame.transform.scale(virtual_surface, (curr_screen_w, curr_screen_h)), (0, 0))
+            pygame.display.flip()
+
+            # After the scene length, return to menu
+            if now_ms - js_scene_start_ms >= js_scene_length_ms:
+                scene = MENU_SCENE_STR
+
+            # Handle quit events
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    return
+                if event.type == pygame.VIDEORESIZE:
+                    screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+
+            continue
 
         elif scene == GAME_SCENE_STR:
             for event in pygame.event.get():
@@ -825,7 +871,7 @@ async def main():
                             next_move_time = now + MOVE_INITIAL_DELAY_MS
 
                     # Button press (H) and legacy key (F) do the same thing
-                    elif event.key== pygame.K_f:
+                    elif event.key in (pygame.K_f, pygame.K_h):
                         x = int((components[Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         y = int((components[Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
 
@@ -907,6 +953,11 @@ async def main():
                 int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET),
             )
 
+            # Win condition: touching the door after it's unlocked
+            if preseed_buttons == total_buttons and player_tile == (exit_x, exit_y):
+                scene = WIN_SCENE_STR
+                continue
+
             if rage_mode:
                 step_ms = GHOST_STEP_RAGE_MS
                 radius = TARGET_RADIUS_RAGE
@@ -930,20 +981,21 @@ async def main():
             else:
                 targeting_now = (d1 <= radius) or (d2 <= radius)
 
-        # Add a new boolean for BFS override during rage mode
-        chase_cooldown_active = (now_ms - last_jumpscare_ms) < JUMPSCARE_COOLDOWN_MS
-        bfs_override_active = rage_mode
+            chase_cooldown_active = (now_ms - last_jumpscare_ms) < JUMPSCARE_COOLDOWN_MS
+            bfs_override_active = rage_mode
 
-        if targeting_now and not ghost_targeting:
-            last_known_player_tile = player_tile
-            trigger_jumpscare()
+            # Acquire snapshot on lock start
+            if targeting_now and not ghost_targeting:
+                last_known_player_tile = player_tile
+                trigger_jumpscare()
 
+            # Update last-known only when LOS exists
             if targeting_now and (g1_can_see or g2_can_see):
                 last_known_player_tile = player_tile
 
-        # Only clear last_known_player_tile if not in rage mode
-        if not targeting_now and not chase_cooldown_active and not bfs_override_active:
-            last_known_player_tile = None
+            # Clear last-known only when lock is off and no overrides
+            if not targeting_now and not chase_cooldown_active and not bfs_override_active:
+                last_known_player_tile = None
 
             set_targeting(targeting_now)
 
@@ -952,60 +1004,56 @@ async def main():
                 ghost_next_step_ms = now_ms + step_ms
                 start = g1_tile
 
-            nxt = None
-            if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
-                nxt = bfs_next_step(start, last_known_player_tile)
-            if nxt is None and last_known_player_tile is not None:
-                nxt = greedy_step_towards(start, last_known_player_tile)
-            if nxt is None:
-                nxt = pacman_roam_step(ghost, start)
-            if nxt is not None:
-                start_ghost_slide(ghost, nxt)
+                nxt = None
+                if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
+                    nxt = bfs_next_step(start, last_known_player_tile)
+                if nxt is None and last_known_player_tile is not None:
+                    nxt = greedy_step_towards(start, last_known_player_tile)
+                if nxt is None:
+                    nxt = pacman_roam_step(ghost, start)
+                if nxt is not None:
+                    start_ghost_slide(ghost, nxt)
 
             # Move ghost2
             if now_ms >= ghost2_next_step_ms and not ghost_slide[ghost2]["moving"]:
                 ghost2_next_step_ms = now_ms + step_ms + 35
                 start = g2_tile
 
-            nxt = None
-            if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
-                nxt = bfs_next_step(start, last_known_player_tile)
-            if nxt is None and last_known_player_tile is not None:
-                nxt = greedy_step_towards(start, last_known_player_tile)
-            if nxt is None:
-                nxt = pacman_roam_step(ghost2, start)
-            if nxt is not None:
-                start_ghost_slide(ghost2, nxt)
+                nxt = None
+                if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
+                    nxt = bfs_next_step(start, last_known_player_tile)
+                if nxt is None and last_known_player_tile is not None:
+                    nxt = greedy_step_towards(start, last_known_player_tile)
+                if nxt is None:
+                    nxt = pacman_roam_step(ghost2, start)
+                if nxt is not None:
+                    start_ghost_slide(ghost2, nxt)
 
+            # Smooth ghost sliding update
             update_ghost_slide(ghost, dt, step_ms)
             update_ghost_slide(ghost2, dt, step_ms)
 
-            if rage_mode and rage_target_tile is not None:
-                if tile_of_entity(ghost) == rage_target_tile or tile_of_entity(ghost2) == rage_target_tile:
-                    rage_target_tile = None
-
-            if last_known_player_tile is not None:
-                if tile_of_entity(ghost) == last_known_player_tile or tile_of_entity(ghost2) == last_known_player_tile:
-                    last_known_player_tile = None
-
+            # Catch condition -> go to jumpscare scene
             if tile_of_entity(ghost) == player_tile or tile_of_entity(ghost2) == player_tile:
                 trigger_jumpscare()
-                return
+                js_scene_start_ms = pygame.time.get_ticks()
+                scene = JS_SCENE_STR
+                continue
 
-            if jumpscare_active:
-                if now_ms - jumpscare_start_ms >= jumpscare_duration_ms:
-                    jumpscare_active = False
+            # Jumpscare lifetime
+            if jumpscare_active and (now_ms - jumpscare_start_ms >= jumpscare_duration_ms):
+                jumpscare_active = False
 
-            # Fog mask centered on player
-            fog_surface.fill((0, 0, 0, 255))
-            position_component = em.entities[player][Position]
-            mask_x = (position_component.x + (WALL_OFFSET // 2)) - light_rad
-            mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
-            fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
-
+            # Render world
             ren_sys.render(em)
 
+            # Fog overlay (optional)
             if USE_FOG_OF_WAR:
+                fog_surface.fill((0, 0, 0, 255))
+                position_component = em.entities[player][Position]
+                mask_x = (position_component.x + (WALL_OFFSET // 2)) - light_rad
+                mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
+                fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
                 virtual_surface.blit(fog_surface, (0, 0))
 
             # Jumpscare overlay
@@ -1026,29 +1074,37 @@ async def main():
                         ox = (V_GAME_W - nw) // 2
                         virtual_surface.blit(overlay, (ox, 0))
 
+            # Timed message
             if active_msg:
                 still_active = draw_timed_text(virtual_surface, active_msg, msg_start_time, MSG_DURATION_MS)
                 if not still_active:
                     active_msg = ""
 
-            # Draw hide bar (legacy feature)
+            # Hide bar UI (above player)
             p_pos = em.entities[player][Position]
-            bar_w = WALL_OFFSET + 5
-            bar_h = 5
-            y_offset = -15
-            bar_x = p_pos.x + (WALL_OFFSET // 2) - (bar_w // 2)
-            bar_y = p_pos.y + y_offset
+            bar_w = WALL_OFFSET + HIDE_BAR_WIDTH_PAD
+            bar_h = HIDE_BAR_HEIGHT
+            bar_x = p_pos.x + (WALL_OFFSET / 2) - (bar_w / 2)
+            bar_y = p_pos.y + HIDE_BAR_Y_OFFSET
 
+            # background
             pygame.draw.rect(virtual_surface, (50, 50, 50), (bar_x, bar_y, bar_w, bar_h))
-            fill_width = int((hide_bar_curent / hide_bar_max) * bar_w)
-            if fill_width > 0:
-                bar_color = (0, 255, 0) if not is_hidden else (255, 0, 0)
-                pygame.draw.rect(virtual_surface, bar_color, (bar_x, bar_y, fill_width, bar_h))
 
-            current_window_size = screen.get_size()
-            scaled_surface = pygame.transform.scale(virtual_surface, current_window_size)
+            # fill
+            frac = 0.0 if hide_bar_max <= 0 else max(0.0, min(1.0, hide_bar_curent / hide_bar_max))
+            fill_w = int(bar_w * frac)
+            if fill_w > 0:
+                bar_color = (255, 0, 0) if is_hidden else (0, 255, 0)
+                pygame.draw.rect(virtual_surface, bar_color, (bar_x, bar_y, fill_w, bar_h))
+
+            # Present
+            curr_w, curr_h = screen.get_size()
+            scaled_surface = pygame.transform.scale(virtual_surface, (curr_w, curr_h))
             screen.blit(scaled_surface, (0, 0))
             pygame.display.flip()
+
+            continue
+
 
         await asyncio.sleep(0)
 
@@ -1062,4 +1118,8 @@ def draw_timed_text(surface, text, start_ticks, duration_ms):
         return True
     return False
 
-asyncio.run(main())
+
+# Ensure main loop is invoked when run as a script
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
