@@ -16,7 +16,7 @@ def asset_path(rel: str) -> str:
     return str(BASE_DIR / rel)
 
 
-USE_FOG_OF_WAR = False
+USE_FOG_OF_WAR = True
 USE_SMOOTH_MOVEMENT = True
 PLAYER_STEP_MS = 120
 
@@ -29,7 +29,7 @@ TILE_SIZE = 50
 MOVE_INITIAL_DELAY_MS = 200
 MOVE_REPEAT_MS = 90
 
-TOTAL_BUTTONS = 1
+TOTAL_BUTTONS = 20
 NUM_GHOSTS = 2 # 1 or 2
 
 FOG_RADIUS_MATCH_LOCK = True
