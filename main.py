@@ -22,8 +22,14 @@ PLAYER_RIGHT_PATH = "assets/sprite/char_right.png"
 PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
+MC_FONT_PATH = "assets/fonts/minecraft.ttf"
 
 BGM_PATH = "assets/audio/bgm.ogg"
+
+MENU_SCENE_STR = "menu"
+GAME_SCENE_STR = "game"
+WIN_SCENE_STR = "win"
+JS_SCENE_STR = 'jumpscare'
 
 WALL_OFFSET = 50
 
@@ -38,6 +44,7 @@ async def main():
 
     global font
     font = pygame.font.Font(FONT_PATH, 75)
+    mc_font = pygame.font.Font(MC_FONT_PATH, 25)
 
     # game settings
     is_door_unlocked = True
@@ -53,6 +60,11 @@ async def main():
 
     exit_x = 0
     exit_y = 0
+
+    hide_bar_max = 3.0
+    hide_bar_curent = hide_bar_max
+    hiden_tick = 0
+    is_hidden = False
 
     active_msg = ""
     msg_start_time = 0
@@ -133,107 +145,146 @@ async def main():
     # play bgm
     pygame.mixer.music.play(-1)
 
+    scene = MENU_SCENE_STR
+
     # main loop
     while True:
-        for event in pygame.event.get():
-            if event == pygame.QUIT:
-                return
+        if scene == MENU_SCENE_STR:
+            for event in pygame.event.get():
+                if event == pygame.QUIT:
+                    return
 
-            if event.type == pygame.VIDEORESIZE:
-                screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_w:
-                    components = em.entities[player]
 
-                    next_x = components[Position].x
-                    next_y = components[Position].y - WALL_OFFSET
+        elif scene == GAME_SCENE_STR:
+            dt = clock.tick(60) / 1000
 
-                    try:
-                        if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
-                            components[Position].y = next_y
-                    except IndexError:
-                        pass
-                elif event.key == pygame.K_s:
-                    components = em.entities[player]
+            for event in pygame.event.get():
+                if event == pygame.QUIT:
+                    return
 
-                    next_x = components[Position].x
-                    next_y = components[Position].y + WALL_OFFSET
+                if event.type == pygame.VIDEORESIZE:
+                    screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+                elif event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_w:
+                        components = em.entities[player]
 
-                    try:
-                        if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
-                            components[Position].y = next_y
-                    except IndexError:
-                        pass
-                elif event.key == pygame.K_d:
-                    components = em.entities[player]
+                        next_x = components[Position].x
+                        next_y = components[Position].y - WALL_OFFSET
 
-                    next_x = components[Position].x + WALL_OFFSET
-                    next_y = components[Position].y 
+                        try:
+                            if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
+                                components[Position].y = next_y
+                        except IndexError:
+                            pass
+                    elif event.key == pygame.K_s:
+                        components = em.entities[player]
 
-                    try:
-                        if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
-                            components[Position].x = next_x
-                    except IndexError:
-                        pass
-                elif event.key == pygame.K_a:
-                    components = em.entities[player]
+                        next_x = components[Position].x
+                        next_y = components[Position].y + WALL_OFFSET
 
-                    next_x = components[Position].x - WALL_OFFSET
-                    next_y = components[Position].y
+                        try:
+                            if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
+                                components[Position].y = next_y
+                        except IndexError:
+                            pass
+                    elif event.key == pygame.K_d:
+                        components = em.entities[player]
 
-                    try:
-                        if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
-                            components[Position].x = next_x
-                    except IndexError:
-                        pass
-                elif event.key == pygame.K_f:
-                    x = components[Position].x // WALL_OFFSET
-                    y = components[Position].y // WALL_OFFSET
+                        next_x = components[Position].x + WALL_OFFSET
+                        next_y = components[Position].y 
 
-                    if mz[y][x] == 3:
-                        mz[y][x] = 4
+                        try:
+                            if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
+                                components[Position].x = next_x
+                        except IndexError:
+                            pass
+                    elif event.key == pygame.K_a:
+                        components = em.entities[player]
 
-                        components = em.entities[mz_entities[y][x]]
-                        components[Renderable].surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
-                        preseed_buttons += 1
+                        next_x = components[Position].x - WALL_OFFSET
+                        next_y = components[Position].y
 
-                        if preseed_buttons == total_buttons:
-                            components = em.entities[mz_entities[exit_y][exit_x]]
-                            components[Renderable].surface = pygame.image.load(DOOR_PATH).convert_alpha()
+                        try:
+                            if mz[next_y // WALL_OFFSET][next_x // WALL_OFFSET] != 1:
+                                components[Position].x = next_x
+                        except IndexError:
+                            pass
+                    elif event.key == pygame.K_f:
+                        x = components[Position].x // WALL_OFFSET
+                        y = components[Position].y // WALL_OFFSET
 
-                            is_door_unlocked = False
+                        if mz[y][x] == 3:
+                            mz[y][x] = 4
 
-                            active_msg = "The door has been unlocked"
-                            msg_start_time = pygame.time.get_ticks()
-                        else:
-                            active_msg = f"{preseed_buttons}/{total_buttons} button(s) pressed"
-                            msg_start_time = pygame.time.get_ticks()
-        
-        fog_surface.fill((0, 0, 0, 255))
-        position_component = em.entities[player][Position]
-        
-        mask_x = (position_component.x + (WALL_OFFSET // 2)) - light_rad
-        mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
+                            components = em.entities[mz_entities[y][x]]
+                            components[Renderable].surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
+                            preseed_buttons += 1
 
-        fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
+                            if preseed_buttons == total_buttons:
+                                components = em.entities[mz_entities[exit_y][exit_x]]
+                                components[Renderable].surface = pygame.image.load(DOOR_PATH).convert_alpha()
 
-        ren_sys.render(em)
+                                is_door_unlocked = False
 
-        if USE_FOG_OF_WAR:
-            virtual_surface.blit(fog_surface, (0, 0))
+                                active_msg = "The door has been unlocked"
+                                msg_start_time = pygame.time.get_ticks()
+                            else:
+                                active_msg = f"{preseed_buttons}/{total_buttons} button(s) pressed"
+                                msg_start_time = pygame.time.get_ticks()
+                    elif event.key == pygame.K_q:
+                        if hide_bar_curent > 0:
+                            is_hidden = not is_hidden
+                            hiden_tick = dt
 
-        if active_msg:
-            still_active = draw_timed_text(virtual_surface, active_msg, msg_start_time, 3000)
-            if not still_active:
-                active_msg = ""
+            if is_hidden:
+                hide_bar_curent = max(hide_bar_curent - dt, 0)
+                if hide_bar_curent == 0:
+                    is_hidden = False
+            else:
+                if hide_bar_curent < hide_bar_max:
+                    hide_bar_curent = min(hide_bar_curent + dt, hide_bar_max)
+            
+            fog_surface.fill((0, 0, 0, 255))
+            position_component = em.entities[player][Position]
+            
+            mask_x = (position_component.x + (WALL_OFFSET // 2)) - light_rad
+            mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
 
-        current_window_size = screen.get_size()
-        scaled_surface = pygame.transform.scale(virtual_surface, current_window_size)
+            fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
 
-        screen.blit(scaled_surface, (0, 0))
-        pygame.display.flip()
+            ren_sys.render(em)
+
+            if USE_FOG_OF_WAR:
+                virtual_surface.blit(fog_surface, (0, 0))
+
+            if active_msg:
+                still_active = draw_timed_text(virtual_surface, active_msg, msg_start_time, 3000)
+                if not still_active:
+                    active_msg = ""
+
+            p_pos = em.entities[player][Position]
+
+            bar_w = WALL_OFFSET + 5
+            bar_h = 5
+            y_offset = -15
+
+            bar_x = p_pos.x + (WALL_OFFSET // 2) - (bar_w // 2)
+            bar_y = p_pos.y + y_offset
+
+            pygame.draw.rect(virtual_surface, (50, 50, 50), (bar_x, bar_y, bar_w, bar_h))
+            
+            fill_width = int((hide_bar_curent / hide_bar_max) * bar_w)
+            if fill_width > 0:
+                bar_color = (0, 255, 0) if not is_hidden else (255, 0, 0)
+                pygame.draw.rect(virtual_surface, bar_color, (bar_x, bar_y, fill_width, bar_h))
+
+
+            current_window_size = screen.get_size()
+            scaled_surface = pygame.transform.scale(virtual_surface, current_window_size)
+
+            screen.blit(scaled_surface, (0, 0))
+            pygame.display.flip()
     
-        clock.tick(60)
         await asyncio.sleep(0)
 
 def draw_timed_text(surface, text, start_ticks, duration_ms):
