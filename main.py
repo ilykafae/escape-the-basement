@@ -15,7 +15,7 @@ def asset_path(rel: str) -> str:
     return str(BASE_DIR / rel)
 
 
-USE_FOG_OF_WAR = True
+USE_FOG_OF_WAR = False
 USE_SMOOTH_MOVEMENT = True
 PLAYER_STEP_MS = 120
 
@@ -28,7 +28,7 @@ TILE_SIZE = 50
 MOVE_INITIAL_DELAY_MS = 200
 MOVE_REPEAT_MS = 90
 
-TOTAL_BUTTONS = 25
+TOTAL_BUTTONS = 2
 
 FOG_RADIUS_MATCH_LOCK = True
 
@@ -51,6 +51,7 @@ FONT_SIZE = 75
 
 # Audio volumes
 BGM_VOLUME = 0.5
+RAGE_BGM_VOLUME = 1
 HEARTBEAT_VOLUME = 1.0
 JUMPSCARE_VOLUME = 0.9
 
@@ -68,6 +69,7 @@ PLAYER_RIGHT_PATH = "assets/sprite/char_right.png"
 PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
 
 BGM_PATH = asset_path("assets/audio/bgm.ogg")
+RAGE_BGM_PATH = asset_path("assets/audio/rage_audio.ogg")
 HEARTBEAT_PATH = asset_path("assets/audio/heartbeat.ogg")
 JUMPSCARE_AUDIO_PATH = asset_path("assets/audio/jumpscare_scream.ogg")
 
@@ -85,7 +87,6 @@ FONT_PATH = 'assets/fonts/redcap.ttf'
 MC_FONT_PATH = "assets/fonts/minecraft.ttf"
 
 WALL_OFFSET = TILE_SIZE
-BGM_PATH = "assets/audio/bgm.ogg"
 
 MENU_SCENE_STR = "menu"
 GAME_SCENE_STR = "game"
@@ -213,13 +214,21 @@ async def main():
     IMG_DOOR = pygame.image.load(DOOR_PATH).convert_alpha()
 
     # --- audio setup ---
-    try:
-        pygame.mixer.music.load(BGM_PATH)
-        pygame.mixer.music.set_volume(BGM_VOLUME)
-        pygame.mixer.music.play(-1)
-    except Exception:
-        # If audio fails on some machines, keep game running.
-        pass
+    def set_music(path: str) -> None:
+        """Load + loop a music track safely. Keeps current pause state."""
+        try:
+            pygame.mixer.music.load(path)
+            pygame.mixer.music.set_volume(RAGE_BGM_VOLUME if path == RAGE_BGM_PATH else BGM_VOLUME)
+            pygame.mixer.music.play(-1)
+            # If currently targeting, keep NON-rage music paused.
+            # Rage music should always play regardless of lock state.
+            if ghost_targeting and path != RAGE_BGM_PATH:
+                pygame.mixer.music.pause()
+        except Exception:
+            pass
+
+    # start normal BGM
+    set_music(BGM_PATH)
 
     heartbeat_snd = None
     jumpscare_snd = None
@@ -683,16 +692,16 @@ async def main():
             return
         ghost_targeting = on
 
-        # Audio behavior:
-        # - When targeting: pause BGM and play ONLY heartbeat loop.
-        # - When not targeting: stop heartbeat and resume BGM.
+        # Music policy:
+        # - Normal mode: targeting pauses music, losing target resumes music.
+        # - Rage mode: rage music should keep playing no matter what.
         try:
-            if on:
-                pygame.mixer.music.pause()
-            else:
-                pygame.mixer.music.unpause()
+            if not rage_mode:
+                if on:
+                    pygame.mixer.music.pause()
+                else:
+                    pygame.mixer.music.unpause()
         except Exception:
-            # If music wasn't loaded, ignore.
             pass
 
         if heartbeat_snd is None:
@@ -791,6 +800,10 @@ async def main():
                     # Rage triggers exactly when all buttons are pressed
                     if preseed_buttons == total_buttons and not rage_mode:
                         rage_mode = True
+
+                        # Switch BGM to rage track
+                        set_music(RAGE_BGM_PATH)
+
                         px_t = int((em.entities[player][Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         py_t = int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         rage_target_tile = (px_t, py_t)
@@ -866,6 +879,10 @@ async def main():
         else:
             targeting_now = (d1 <= radius) or (d2 <= radius)
 
+        # Add a new boolean for BFS override during rage mode
+        chase_cooldown_active = (now_ms - last_jumpscare_ms) < JUMPSCARE_COOLDOWN_MS
+        bfs_override_active = rage_mode
+
         if targeting_now and not ghost_targeting:
             last_known_player_tile = player_tile
             trigger_jumpscare()
@@ -873,7 +890,8 @@ async def main():
         if targeting_now and (g1_can_see or g2_can_see):
             last_known_player_tile = player_tile
 
-        if not targeting_now:
+        # Only clear last_known_player_tile if not in rage mode
+        if not targeting_now and not chase_cooldown_active and not bfs_override_active:
             last_known_player_tile = None
 
         set_targeting(targeting_now)
@@ -884,7 +902,7 @@ async def main():
             start = g1_tile
 
             nxt = None
-            if targeting_now and last_known_player_tile is not None:
+            if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
                 nxt = bfs_next_step(start, last_known_player_tile)
             if nxt is None and last_known_player_tile is not None:
                 nxt = greedy_step_towards(start, last_known_player_tile)
@@ -899,7 +917,7 @@ async def main():
             start = g2_tile
 
             nxt = None
-            if targeting_now and last_known_player_tile is not None:
+            if (targeting_now or chase_cooldown_active or bfs_override_active) and last_known_player_tile is not None:
                 nxt = bfs_next_step(start, last_known_player_tile)
             if nxt is None and last_known_player_tile is not None:
                 nxt = greedy_step_towards(start, last_known_player_tile)
