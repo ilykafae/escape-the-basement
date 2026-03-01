@@ -16,7 +16,7 @@ def asset_path(rel: str) -> str:
     return str(BASE_DIR / rel)
 
 
-USE_FOG_OF_WAR = True
+USE_FOG_OF_WAR = False
 USE_SMOOTH_MOVEMENT = True
 PLAYER_STEP_MS = 120
 
@@ -29,7 +29,8 @@ TILE_SIZE = 50
 MOVE_INITIAL_DELAY_MS = 200
 MOVE_REPEAT_MS = 90
 
-TOTAL_BUTTONS = 2
+TOTAL_BUTTONS = 1
+NUM_GHOSTS = 3 # 1 or 2
 
 FOG_RADIUS_MATCH_LOCK = True
 
@@ -166,7 +167,12 @@ async def main():
 
     pygame.init()
     pygame.font.init()
-    pygame.mixer.init()
+    AUDIO_OK = True
+    try:
+        pygame.mixer.init()
+    except Exception as e:
+        AUDIO_OK = False
+        print("[audio] mixer.init failed:", e)
 
     global font
     font = pygame.font.Font(FONT_PATH, 75)
@@ -225,6 +231,8 @@ async def main():
     # --- audio setup ---
     def set_music(path: str) -> None:
         """Load + loop a music track safely. Keeps current pause state."""
+        if not AUDIO_OK:
+            return
         try:
             pygame.mixer.music.load(path)
             pygame.mixer.music.set_volume(RAGE_BGM_VOLUME if path == RAGE_BGM_PATH else BGM_VOLUME)
@@ -241,20 +249,24 @@ async def main():
 
     heartbeat_snd = None
     jumpscare_snd = None
-    try:
-        heartbeat_snd = pygame.mixer.Sound(HEARTBEAT_PATH)
-        heartbeat_snd.set_volume(HEARTBEAT_VOLUME)
-    except Exception:
-        heartbeat_snd = None
 
-    try:
-        jumpscare_snd = pygame.mixer.Sound(JUMPSCARE_AUDIO_PATH)
-        jumpscare_snd.set_volume(JUMPSCARE_VOLUME)
-    except Exception:
-        jumpscare_snd = None
+    if AUDIO_OK:
+        try:
+            heartbeat_snd = pygame.mixer.Sound(HEARTBEAT_PATH)
+            heartbeat_snd.set_volume(HEARTBEAT_VOLUME)
+        except Exception as e:
+            heartbeat_snd = None
+            print("[audio] heartbeat load failed:", e)
 
-    heartbeat_channel = pygame.mixer.Channel(1)
-    jumpscare_channel = pygame.mixer.Channel(2)
+        try:
+            jumpscare_snd = pygame.mixer.Sound(JUMPSCARE_AUDIO_PATH)
+            jumpscare_snd.set_volume(JUMPSCARE_VOLUME)
+        except Exception as e:
+            jumpscare_snd = None
+            print("[audio] jumpscare load failed:", e)
+
+    heartbeat_channel = pygame.mixer.Channel(1) if AUDIO_OK else None
+    jumpscare_channel = pygame.mixer.Channel(2) if AUDIO_OK else None
 
     # jumpscare visuals (audio length unchanged)
     jumpscare_img = None
@@ -289,7 +301,8 @@ async def main():
         jumpscare_start_ms = now
 
         if jumpscare_snd is not None:
-            jumpscare_channel.play(jumpscare_snd)
+            if jumpscare_channel is not None:
+                jumpscare_channel.play(jumpscare_snd)
 
     def jumpscare_alpha(now_ms: int) -> int:
         # 0..fade_start => 255, then fade out until fade_end, then 0
@@ -317,6 +330,19 @@ async def main():
     def switch_to_win():
         nonlocal scene
         scene = WIN_SCENE_STR
+
+        # Stop rage music immediately on escape
+        try:
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
+
+        # Also stop heartbeat if it is playing
+        try:
+            if heartbeat_channel is not None:
+                heartbeat_channel.stop()
+        except Exception:
+            pass
 
     def switch_to_js():
         nonlocal scene
@@ -367,56 +393,53 @@ async def main():
         ghost = em.create_entity()
         em.add_component(ghost, Position(gx, gy))
         em.add_component(ghost, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+        ghost2 = None
+        if NUM_GHOSTS >= 2:
+            # second ghost: spawn FAR from the first so they patrol different regions
+            def find_farthest_walkable_from(start_tx: int, start_ty: int) -> tuple[int, int]:
+                W = len(mz[0])
+                H = len(mz)
+                INF = 10**9
 
-        # second ghost: spawn FAR from the first so they patrol different regions
-        def find_farthest_walkable_from(start_tx: int, start_ty: int) -> tuple[int, int]:
-            W = len(mz[0])
-            H = len(mz)
-            INF = 10**9
-            dist = [[INF for _ in range(W)] for _ in range(H)]
-            q = deque()
-            if 0 <= start_tx < W and 0 <= start_ty < H and mz[start_ty][start_tx] != 1:
-                dist[start_ty][start_tx] = 0
-                q.append((start_tx, start_ty))
-            else:
-                for yy in range(H):
-                    for xx in range(W):
-                        if mz[yy][xx] != 1:
-                            dist[yy][xx] = 0
-                            q.append((xx, yy))
+                dist = [[INF for _ in range(W)] for _ in range(H)]
+                q = deque()
+
+                # start from ghost1 tile (or fallback to first walkable tile)
+                if 0 <= start_tx < W and 0 <= start_ty < H and mz[start_ty][start_tx] != 1:
+                    dist[start_ty][start_tx] = 0
+                    q.append((start_tx, start_ty))
+                else:
+                    for yy in range(H):
+                        for xx in range(W):
+                            if mz[yy][xx] != 1:
+                                dist[yy][xx] = 0
+                                q.append((xx, yy))
+                                break
+                        if q:
                             break
-                    if q:
-                        break
-            while q:
-                x, y = q.popleft()
-                nd = dist[y][x] + 1
-                for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
-                    nx, ny = x + dx, y + dy
-                    if 0 <= nx < W and 0 <= ny < H and mz[ny][nx] != 1 and dist[ny][nx] > nd:
-                        dist[ny][nx] = nd
-                        q.append((nx, ny))
-            avoid = {
-                (
-                    int((px + (WALL_OFFSET / 2)) // WALL_OFFSET),
-                    int((py + (WALL_OFFSET / 2)) // WALL_OFFSET),
-                ),
-                (ex, ey),
-            }
-            best = (start_tx, start_ty)
-            bestd = -1
-            for yy in range(H):
-                for xx in range(W):
-                    if mz[yy][xx] == 1:
-                        continue
-                    d = dist[yy][xx]
-                    if d >= INF:
-                        continue
-                    if (xx, yy) in avoid:
-                        continue
-                    if d > bestd:
-                        bestd = d
-                        best = (xx, yy)
-            if bestd < 0:
+
+                # BFS distance map
+                while q:
+                    x, y = q.popleft()
+                    nd = dist[y][x] + 1
+                    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < W and 0 <= ny < H and mz[ny][nx] != 1 and dist[ny][nx] > nd:
+                            dist[ny][nx] = nd
+                            q.append((nx, ny))
+
+                # avoid spawning on player tile and door tile if possible
+                avoid = {
+                    (
+                        int((px + (WALL_OFFSET / 2)) // WALL_OFFSET),
+                        int((py + (WALL_OFFSET / 2)) // WALL_OFFSET),
+                    ),
+                    (ex, ey),
+                }
+
+                best = (start_tx, start_ty)
+                bestd = -1
+
                 for yy in range(H):
                     for xx in range(W):
                         if mz[yy][xx] == 1:
@@ -424,33 +447,47 @@ async def main():
                         d = dist[yy][xx]
                         if d >= INF:
                             continue
+                        if (xx, yy) in avoid:
+                            continue
                         if d > bestd:
                             bestd = d
                             best = (xx, yy)
-            return best
 
-        g1_tx = int((gx + (WALL_OFFSET / 2)) // WALL_OFFSET)
-        g1_ty = int((gy + (WALL_OFFSET / 2)) // WALL_OFFSET)
-        g2_tx, g2_ty = find_farthest_walkable_from(g1_tx, g1_ty)
-        ghost2_x = g2_tx * WALL_OFFSET
-        ghost2_y = g2_ty * WALL_OFFSET
-        ghost2 = em.create_entity()
-        em.add_component(ghost2, Position(ghost2_x, ghost2_y))
-        em.add_component(ghost2, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+                # fallback if everything got avoided
+                if bestd < 0:
+                    for yy in range(H):
+                        for xx in range(W):
+                            if mz[yy][xx] == 1:
+                                continue
+                            d = dist[yy][xx]
+                            if d >= INF:
+                                continue
+                            if d > bestd:
+                                bestd = d
+                                best = (xx, yy)
 
+                return best
+
+            # IMPORTANT: these must be OUTSIDE the helper function
+            g1_tx = int((gx + (WALL_OFFSET / 2)) // WALL_OFFSET)
+            g1_ty = int((gy + (WALL_OFFSET / 2)) // WALL_OFFSET)
+            g2_tx, g2_ty = find_farthest_walkable_from(g1_tx, g1_ty)
+
+            ghost2_x = g2_tx * WALL_OFFSET
+            ghost2_y = g2_ty * WALL_OFFSET
+            ghost2 = em.create_entity()
+            em.add_component(ghost2, Position(ghost2_x, ghost2_y))
+            em.add_component(ghost2, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+
+        # player
         player = em.create_entity()
         em.add_component(player, Position(px, py))
         em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
 
-        try:
-            if not pygame.mixer.music.get_busy():
-                pygame.mixer.music.play(-1)
-        except Exception:
-            pass
         return em, ren_sys, mz, mz_entities, player, ghost, ghost2, px, py, gx, gy, ex, ey
 
     def reset_game():
-        nonlocal is_door_unlocked, preseed_buttons, hide_bar_curent, hiden_tick, is_hidden, active_msg, msg_start_time, rage_mode, rage_target_tile, ghost_next_step_ms, ghost2_next_step_ms, ghost_targeting, ghost_slide, roam_dir, scatter_index, last_known_player_tile
+        nonlocal is_door_unlocked, preseed_buttons, hide_bar_curent, hiden_tick, is_hidden, active_msg, msg_start_time, rage_mode, rage_target_tile, ghost_next_step_ms, ghost2_next_step_ms, ghost_targeting, ghost_slide, roam_dir, scatter_index, last_known_player_tile, held_dir, next_move_time, player_target
         is_door_unlocked = True
         preseed_buttons = 0
         hide_bar_curent = hide_bar_max
@@ -463,7 +500,17 @@ async def main():
         ghost_next_step_ms = 0
         ghost2_next_step_ms = 0
         ghost_targeting = False
+        # Reset movement state so a new run doesn't inherit held keys / smooth target
+        held_dir = (0, 0)
+        next_move_time = 0
+        player_target = None
         (em_, ren_sys_, mz_, mz_entities_, player_, ghost_, ghost2_, player_x_, player_y_, ghost_x_, ghost_y_, exit_x_, exit_y_) = build_world(total_buttons)
+        # Reset music back to normal BGM on new run
+        set_music(BGM_PATH)
+        try:
+            pygame.mixer.music.unpause()
+        except Exception:
+            pass
         # Update all references
         nonlocal em, ren_sys, mz, mz_entities, player, ghost, ghost2, player_x, player_y, ghost_x, ghost_y, exit_x, exit_y
         em = em_
@@ -489,6 +536,8 @@ async def main():
 
     # Initialize world/entities
     (em, ren_sys, mz, mz_entities, player, ghost, ghost2, player_x, player_y, ghost_x, ghost_y, exit_x, exit_y) = build_world(total_buttons)
+    # Ensure we start in normal music
+    set_music(BGM_PATH)
 
     # Ghost AI (normal / rage)
 
@@ -755,6 +804,9 @@ async def main():
         if heartbeat_snd is None:
             return
 
+        if heartbeat_channel is None:
+            return
+
         if on:
             try:
                 heartbeat_channel.play(heartbeat_snd, loops=-1)
@@ -799,6 +851,7 @@ async def main():
 
                 if start_btn.is_pressed(event, v_mouse):
                     reset_game()
+                    held_dir = (0, 0)
                     switch_scene(GAME_SCENE_STR)
                 elif quit_btn.is_pressed(event, v_mouse):
                     return
@@ -910,8 +963,8 @@ async def main():
                             now = pygame.time.get_ticks()
                             next_move_time = now + MOVE_INITIAL_DELAY_MS
 
-                    # Button press (H) and legacy key (F) do the same thing
-                    elif event.key in (pygame.K_f, pygame.K_h) and not is_hidden:
+                    # Button press (SPACE) and legacy key (F) do the same thing
+                    elif event.key in (pygame.K_f, pygame.K_SPACE) and not is_hidden:
                         x = int((components[Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         y = int((components[Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
 
@@ -979,7 +1032,7 @@ async def main():
                 hide_bar_curent = max(hide_bar_curent - dt, 0)
                 if hide_bar_curent == 0:
                     is_hidden = False
-                    set_targeting(true)
+                    set_targeting(False)
             else:
                 if hide_bar_curent < hide_bar_max:
                     hide_bar_curent = min(hide_bar_curent + (dt * HIDDEN_RECHARGE_MULTIPLIER), hide_bar_max)
