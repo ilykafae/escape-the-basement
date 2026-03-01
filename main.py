@@ -1032,7 +1032,6 @@ async def main():
                 hide_bar_curent = max(hide_bar_curent - dt, 0)
                 if hide_bar_curent == 0:
                     is_hidden = False
-                    set_targeting(False)
             else:
                 if hide_bar_curent < hide_bar_max:
                     hide_bar_curent = min(hide_bar_curent + (dt * HIDDEN_RECHARGE_MULTIPLIER), hide_bar_max)
