@@ -82,8 +82,17 @@ JUMPSCARE_IMG_CANDIDATES = [
 ]
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
+MC_FONT_PATH = "assets/fonts/minecraft.ttf"
 
 WALL_OFFSET = TILE_SIZE
+BGM_PATH = "assets/audio/bgm.ogg"
+
+MENU_SCENE_STR = "menu"
+GAME_SCENE_STR = "game"
+WIN_SCENE_STR = "win"
+JS_SCENE_STR = 'jumpscare'
+
+WALL_OFFSET = 50
 
 font = None
 
@@ -150,7 +159,8 @@ async def main():
     pygame.mixer.init()
 
     global font
-    font = pygame.font.Font(FONT_PATH, FONT_SIZE)
+    font = pygame.font.Font(FONT_PATH, 75)
+    mc_font = pygame.font.Font(MC_FONT_PATH, 25)
 
     # game settings
     is_door_unlocked = True
@@ -166,6 +176,11 @@ async def main():
 
     exit_x = 0
     exit_y = 0
+
+    hide_bar_max = 3.0
+    hide_bar_curent = hide_bar_max
+    hiden_tick = 0
+    is_hidden = False
 
     active_msg = ""
     msg_start_time = 0
@@ -694,22 +709,26 @@ async def main():
             except Exception:
                 pass
 
+    scene = MENU_SCENE_STR
+
     # main loop
     while True:
         dt = clock.tick(60) / 1000.0
-        # Cap dt to avoid snapping if the window stalls for a moment
         if dt > 0.05:
             dt = 0.05
+
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return
 
             if event.type == pygame.VIDEORESIZE:
                 screen = pygame.display.set_mode(event.size, pygame.RESIZABLE)
+
             elif event.type == pygame.KEYDOWN:
-                # Always reference the player's components here (prevents NameError/UnboundLocalError for non-arrow keys)
+                # Always reference player's components (safe for any key)
                 components = em.entities[player]
 
+                # Arrow keys: hold-to-move direction
                 if event.key == pygame.K_UP:
                     held_dir = (0, -1)
                     if not USE_SMOOTH_MOVEMENT:
@@ -734,43 +753,56 @@ async def main():
                         move_player_by_tiles(-1, 0)
                         now = pygame.time.get_ticks()
                         next_move_time = now + MOVE_INITIAL_DELAY_MS
-                elif event.key == pygame.K_h:
+
+                # WASD: also supported (mapped to immediate step; keeps old branch feature)
+                elif event.key == pygame.K_w:
+                    move_player_by_tiles(0, -1)
+                elif event.key == pygame.K_s:
+                    move_player_by_tiles(0, 1)
+                elif event.key == pygame.K_d:
+                    move_player_by_tiles(1, 0)
+                elif event.key == pygame.K_a:
+                    move_player_by_tiles(-1, 0)
+
+                # Button press (H) and legacy key (F) do the same thing
+                elif event.key in (pygame.K_h, pygame.K_f):
                     x = int((components[Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                     y = int((components[Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
 
-                    # Safety: if somehow out of bounds, ignore instead of crashing and quitting
-                    if y < 0 or y >= len(mz) or x < 0 or x >= len(mz[0]):
-                        continue
+                    if 0 <= y < len(mz) and 0 <= x < len(mz[0]):
+                        if mz[y][x] == 3:
+                            mz[y][x] = 4
 
-                    if mz[y][x] == 3:
-                        mz[y][x] = 4
+                            tile_comp = em.entities[mz_entities[y][x]]
+                            tile_comp[Renderable].surface = IMG_BUTTON_PRESSED
+                            preseed_buttons += 1
 
-                        tile_comp = em.entities[mz_entities[y][x]]
-                        tile_comp[Renderable].surface = IMG_BUTTON_PRESSED
-                        preseed_buttons += 1
+                            if preseed_buttons == total_buttons:
+                                door_comp = em.entities[mz_entities[exit_y][exit_x]]
+                                door_comp[Renderable].surface = IMG_DOOR
 
-                        if preseed_buttons == total_buttons:
-                            door_comp = em.entities[mz_entities[exit_y][exit_x]]
-                            door_comp[Renderable].surface = IMG_DOOR
+                                is_door_unlocked = False
+                                active_msg = "The door has been unlocked"
+                                msg_start_time = pygame.time.get_ticks()
+                            else:
+                                active_msg = f"{preseed_buttons}/{total_buttons} button(s) pressed"
+                                msg_start_time = pygame.time.get_ticks()
 
-                            is_door_unlocked = False
-
-                            active_msg = "The door has been unlocked"
-                            msg_start_time = pygame.time.get_ticks()
-                        else:
-                            active_msg = f"{preseed_buttons}/{total_buttons} button(s) pressed"
-                            msg_start_time = pygame.time.get_ticks()
-
-                    # Rage mode triggers exactly when all buttons are pressed
+                    # Rage triggers exactly when all buttons are pressed
                     if preseed_buttons == total_buttons and not rage_mode:
                         rage_mode = True
-                        # snapshot player location at rage start
                         px_t = int((em.entities[player][Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         py_t = int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         rage_target_tile = (px_t, py_t)
                         trigger_jumpscare()
+
+                # Hide toggle (legacy feature)
+                elif event.key == pygame.K_q:
+                    if hide_bar_curent > 0:
+                        is_hidden = not is_hidden
+                        hiden_tick = dt
+
             elif event.type == pygame.KEYUP:
-                # Release stops the continuous movement immediately
                 dx, dy = held_dir
                 if dy == -1 and event.key == pygame.K_UP:
                     held_dir = (0, 0)
@@ -780,7 +812,7 @@ async def main():
                     held_dir = (0, 0)
                 elif dx == -1 and event.key == pygame.K_LEFT:
                     held_dir = (0, 0)
-        
+
         # Movement update
         if USE_SMOOTH_MOVEMENT:
             update_player_smooth(dt)
@@ -792,30 +824,34 @@ async def main():
                     move_player_by_tiles(dx, dy)
                     next_move_time = now + MOVE_REPEAT_MS
 
+        # Hide bar drain/recover (legacy feature)
+        if is_hidden:
+            hide_bar_curent = max(hide_bar_curent - dt, 0)
+            if hide_bar_curent == 0:
+                is_hidden = False
+        else:
+            if hide_bar_curent < hide_bar_max:
+                hide_bar_curent = min(hide_bar_curent + dt, hide_bar_max)
+
         # =========================
         # Ghost update (movement + targeting + catch)
         # =========================
         now_ms = pygame.time.get_ticks()
 
-        # Determine current player target
         player_tile = (
             int((em.entities[player][Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET),
             int((em.entities[player][Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET),
         )
 
-        # Choose target radius and step speed based on mode
         if rage_mode:
             step_ms = GHOST_STEP_RAGE_MS
             radius = TARGET_RADIUS_RAGE
-            # Rage uses snapshot target first; if reached, continue chasing live player
             target_tile = rage_target_tile if rage_target_tile is not None else player_tile
         else:
             step_ms = GHOST_STEP_NORMAL_MS
             radius = TARGET_RADIUS_NORMAL
             target_tile = player_tile
 
-        # Targeting rule (lock): within radius can lock THROUGH walls.
-        # But real-time tracking (updating last-known) only happens when LOS exists.
         g1_tile = tile_of_entity(ghost)
         g2_tile = tile_of_entity(ghost2)
 
@@ -825,24 +861,18 @@ async def main():
         d1 = manhattan(g1_tile, player_tile)
         d2 = manhattan(g2_tile, player_tile)
 
-        # Hysteresis:
-        # - Acquire lock when within `radius` (5)
-        # - Keep lock until BOTH ghosts are farther than UNLOCK_RADIUS (9)
         if ghost_targeting:
             targeting_now = not (d1 > UNLOCK_RADIUS and d2 > UNLOCK_RADIUS)
         else:
             targeting_now = (d1 <= radius) or (d2 <= radius)
 
-        # If targeting just started: jumpscare + heartbeat + snapshot last known player tile (ONE-TIME info)
         if targeting_now and not ghost_targeting:
             last_known_player_tile = player_tile
             trigger_jumpscare()
 
-        # If still targeting: ONLY update last-known when at least one ghost has LOS (real-time info)
         if targeting_now and (g1_can_see or g2_can_see):
             last_known_player_tile = player_tile
 
-        # If lock is lost (out of radius), drop last-known so ghosts resume roaming
         if not targeting_now:
             last_known_player_tile = None
 
@@ -854,75 +884,54 @@ async def main():
             start = g1_tile
 
             nxt = None
-
-            # While targeting (within radius), allow BFS even through walls.
-            # BUT we BFS toward last-known player tile, not guaranteed live position.
             if targeting_now and last_known_player_tile is not None:
                 nxt = bfs_next_step(start, last_known_player_tile)
-
-            # If BFS fails, fall back to a greedy step toward last-known
             if nxt is None and last_known_player_tile is not None:
                 nxt = greedy_step_towards(start, last_known_player_tile)
-
-            # Otherwise roam
             if nxt is None:
                 nxt = pacman_roam_step(ghost, start)
-
             if nxt is not None:
                 start_ghost_slide(ghost, nxt)
 
-        # Move ghost2 (slightly desync so they don't stack)
+        # Move ghost2
         if now_ms >= ghost2_next_step_ms and not ghost_slide[ghost2]["moving"]:
             ghost2_next_step_ms = now_ms + step_ms + 35
             start = g2_tile
 
             nxt = None
-
-            # While targeting (within radius), allow BFS even through walls.
-            # BFS toward last-known player tile (not necessarily live).
             if targeting_now and last_known_player_tile is not None:
                 nxt = bfs_next_step(start, last_known_player_tile)
-
-            # If BFS fails, fall back to a greedy step toward last-known
             if nxt is None and last_known_player_tile is not None:
                 nxt = greedy_step_towards(start, last_known_player_tile)
-
-            # Otherwise roam
             if nxt is None:
                 nxt = pacman_roam_step(ghost2, start)
-
             if nxt is not None:
                 start_ghost_slide(ghost2, nxt)
 
         update_ghost_slide(ghost, dt, step_ms)
         update_ghost_slide(ghost2, dt, step_ms)
 
-        # If rage snapshot reached, switch to live chase
         if rage_mode and rage_target_tile is not None:
             if tile_of_entity(ghost) == rage_target_tile or tile_of_entity(ghost2) == rage_target_tile:
                 rage_target_tile = None
 
-        # If last-known reached, clear it (stop the "go to that coordinate" behavior)
         if last_known_player_tile is not None:
             if tile_of_entity(ghost) == last_known_player_tile or tile_of_entity(ghost2) == last_known_player_tile:
                 last_known_player_tile = None
 
-        # Catch condition: ghost touches player
         if tile_of_entity(ghost) == player_tile or tile_of_entity(ghost2) == player_tile:
             trigger_jumpscare()
             return
 
-        # Jumpscare lifetime
         if jumpscare_active:
             if now_ms - jumpscare_start_ms >= jumpscare_duration_ms:
                 jumpscare_active = False
 
+        # Fog mask centered on player
         fog_surface.fill((0, 0, 0, 255))
         position_component = em.entities[player][Position]
-        
         mask_x = (position_component.x + (WALL_OFFSET // 2)) - light_rad
         mask_y = (position_component.y + (WALL_OFFSET // 2)) - light_rad
-
         fog_surface.blit(light_mask, (mask_x, mask_y), special_flags=pygame.BLEND_RGBA_MIN)
 
         ren_sys.render(em)
@@ -930,11 +939,9 @@ async def main():
         if USE_FOG_OF_WAR:
             virtual_surface.blit(fog_surface, (0, 0))
 
-        # Jumpscare overlay: player can still move, but essentially can't see
-        # jumpscare overlay
+        # Jumpscare overlay
         if jumpscare_active and jumpscare_img is not None:
-            now_ms = pygame.time.get_ticks()
-            a = jumpscare_alpha(now_ms)
+            a = jumpscare_alpha(pygame.time.get_ticks())
             if a > 0:
                 cover = pygame.Surface((V_GAME_W, V_GAME_H))
                 cover.fill((0, 0, 0))
@@ -955,12 +962,25 @@ async def main():
             if not still_active:
                 active_msg = ""
 
+        # Draw hide bar (legacy feature)
+        p_pos = em.entities[player][Position]
+        bar_w = WALL_OFFSET + 5
+        bar_h = 5
+        y_offset = -15
+        bar_x = p_pos.x + (WALL_OFFSET // 2) - (bar_w // 2)
+        bar_y = p_pos.y + y_offset
+
+        pygame.draw.rect(virtual_surface, (50, 50, 50), (bar_x, bar_y, bar_w, bar_h))
+        fill_width = int((hide_bar_curent / hide_bar_max) * bar_w)
+        if fill_width > 0:
+            bar_color = (0, 255, 0) if not is_hidden else (255, 0, 0)
+            pygame.draw.rect(virtual_surface, bar_color, (bar_x, bar_y, fill_width, bar_h))
+
         current_window_size = screen.get_size()
         scaled_surface = pygame.transform.scale(virtual_surface, current_window_size)
-
         screen.blit(scaled_surface, (0, 0))
         pygame.display.flip()
-    
+
         await asyncio.sleep(0)
 
 def draw_timed_text(surface, text, start_ticks, duration_ms):
