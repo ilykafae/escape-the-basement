@@ -103,7 +103,6 @@ GAME_SCENE_STR = "game"
 WIN_SCENE_STR = "win"
 JS_SCENE_STR = 'jumpscare'
 
-WALL_OFFSET = 50
 
 font = None
 
@@ -306,117 +305,105 @@ async def main():
         left = jumpscare_fade_end_ms - t
         return max(0, min(255, int(255 * (left / span))))
 
-    em = EntityManager()
+    # --- scene helpers and world/game reset ---
+    def switch_scene(target_scene):
+        nonlocal scene
+        scene = target_scene
 
-    # init systems
-    ren_sys = RenderSystem(virtual_surface)
+    def switch_to_menu():
+        nonlocal scene
+        scene = MENU_SCENE_STR
 
-    mz = maze.generate_maze(V_GAME_W // WALL_OFFSET, V_GAME_H // WALL_OFFSET, 1, total_buttons)
+    def switch_to_win():
+        nonlocal scene
+        scene = WIN_SCENE_STR
 
-    # create entities here
-    mz_entities = []
+    def switch_to_js():
+        nonlocal scene
+        scene = JS_SCENE_STR
 
-    for irow, row in enumerate(mz):
-        current_row_entities = []
-        for icol, tile in enumerate(row):
-            surface = None
-            if tile == 1:
-                ttype = random.randrange(0, 7)
-                if ttype == 0:
-                    surface = pygame.image.load(B_WALL_PATH).convert_alpha()
-                else:
-                    surface = pygame.image.load(WALL_PATH).convert_alpha()
-            elif tile == 0:
+    def build_world(button_count):
+        em = EntityManager()
+        ren_sys = RenderSystem(virtual_surface)
+        mz = maze.generate_maze(V_GAME_W // WALL_OFFSET, V_GAME_H // WALL_OFFSET, 1, button_count)
+        mz_entities = []
+        px, py, gx, gy, ex, ey = 0, 0, 0, 0, 0, 0
+        for irow, row in enumerate(mz):
+            current_row_entities = []
+            for icol, tile in enumerate(row):
+                surface = None
+                if tile == 1:
+                    ttype = random.randrange(0, 7)
+                    if ttype == 0:
+                        surface = pygame.image.load(B_WALL_PATH).convert_alpha()
+                    else:
+                        surface = pygame.image.load(WALL_PATH).convert_alpha()
+                elif tile == 0:
                     surface = pygame.image.load(FLOOR_PATH).convert_alpha()
-            elif tile == -1:
-                surface = pygame.image.load(LOCKED_DOOR_PATH).convert_alpha()
-                exit_x = icol
-                exit_y = irow
+                elif tile == -1:
+                    surface = pygame.image.load(LOCKED_DOOR_PATH).convert_alpha()
+                    ex = icol
+                    ey = irow
+                    gx = icol * WALL_OFFSET
+                    gy = (irow - 1) * WALL_OFFSET
+                elif tile == 2:
+                    surface = pygame.image.load(FLOOR_PATH).convert_alpha()
+                    px = icol * WALL_OFFSET
+                    py = irow * WALL_OFFSET
+                elif tile == 3:
+                    surface = pygame.image.load(BUTTON_PATH).convert_alpha()
+                elif tile == 4:
+                    surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
+                else:
+                    surface = pygame.image.load(FLOOR_PATH).convert_alpha()
+                x = icol * WALL_OFFSET
+                y = irow * WALL_OFFSET
+                tile_entity = em.create_entity()
+                em.add_component(tile_entity, Position(x, y))
+                em.add_component(tile_entity, Renderable(surface, WALL_OFFSET, WALL_OFFSET))
+                current_row_entities.append(tile_entity)
+            mz_entities.append(current_row_entities)
 
-                ghost_x = icol * WALL_OFFSET
-                ghost_y = (irow - 1) * WALL_OFFSET
-            elif tile == 2:
-                surface = pygame.image.load(FLOOR_PATH).convert_alpha()
-                player_x = icol * WALL_OFFSET
-                player_y = irow * WALL_OFFSET
-            elif tile == 3:
-                surface = pygame.image.load(BUTTON_PATH).convert_alpha()
-            elif tile == 4:
-                surface = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
+        ghost = em.create_entity()
+        em.add_component(ghost, Position(gx, gy))
+        em.add_component(ghost, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+
+        # second ghost: spawn FAR from the first so they patrol different regions
+        def find_farthest_walkable_from(start_tx: int, start_ty: int) -> tuple[int, int]:
+            W = len(mz[0])
+            H = len(mz)
+            INF = 10**9
+            dist = [[INF for _ in range(W)] for _ in range(H)]
+            q = deque()
+            if 0 <= start_tx < W and 0 <= start_ty < H and mz[start_ty][start_tx] != 1:
+                dist[start_ty][start_tx] = 0
+                q.append((start_tx, start_ty))
             else:
-                surface = pygame.image.load(FLOOR_PATH).convert_alpha()
-            
-            x = icol * WALL_OFFSET
-            y = irow * WALL_OFFSET
-            tile_entity = em.create_entity()
-            em.add_component(tile_entity, Position(x, y))
-            em.add_component(tile_entity, Renderable(surface, WALL_OFFSET, WALL_OFFSET))
-
-            current_row_entities.append(tile_entity)
-
-        mz_entities.append(current_row_entities)
-
-    ghost = em.create_entity()
-    em.add_component(ghost, Position(ghost_x, ghost_y))
-    em.add_component(ghost, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
-
-    # second ghost: spawn FAR from the first so they patrol different regions
-    def find_farthest_walkable_from(start_tx: int, start_ty: int) -> tuple[int, int]:
-        W = len(mz[0])
-        H = len(mz)
-        INF = 10**9
-
-        dist = [[INF for _ in range(W)] for _ in range(H)]
-        q = deque()
-
-        if 0 <= start_tx < W and 0 <= start_ty < H and mz[start_ty][start_tx] != 1:
-            dist[start_ty][start_tx] = 0
-            q.append((start_tx, start_ty))
-        else:
-            # fallback: scan for any walkable tile
-            for yy in range(H):
-                for xx in range(W):
-                    if mz[yy][xx] != 1:
-                        dist[yy][xx] = 0
-                        q.append((xx, yy))
+                for yy in range(H):
+                    for xx in range(W):
+                        if mz[yy][xx] != 1:
+                            dist[yy][xx] = 0
+                            q.append((xx, yy))
+                            break
+                    if q:
                         break
-                if q:
-                    break
-
-        while q:
-            x, y = q.popleft()
-            nd = dist[y][x] + 1
-            for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
-                nx, ny = x + dx, y + dy
-                if 0 <= nx < W and 0 <= ny < H and mz[ny][nx] != 1 and dist[ny][nx] > nd:
-                    dist[ny][nx] = nd
-                    q.append((nx, ny))
-
-        # pick farthest tile (avoid player spawn and door tile if possible)
-        avoid = {
-            (
-                int((player_x + (WALL_OFFSET / 2)) // WALL_OFFSET),
-                int((player_y + (WALL_OFFSET / 2)) // WALL_OFFSET),
-            ),
-            (exit_x, exit_y),
-        }
-        best = (start_tx, start_ty)
-        bestd = -1
-        for yy in range(H):
-            for xx in range(W):
-                if mz[yy][xx] == 1:
-                    continue
-                d = dist[yy][xx]
-                if d >= INF:
-                    continue
-                if (xx, yy) in avoid:
-                    continue
-                if d > bestd:
-                    bestd = d
-                    best = (xx, yy)
-
-        # if everything was avoided (tiny maps), just use absolute farthest
-        if bestd < 0:
+            while q:
+                x, y = q.popleft()
+                nd = dist[y][x] + 1
+                for dx, dy in ((1,0),(-1,0),(0,1),(0,-1)):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < W and 0 <= ny < H and mz[ny][nx] != 1 and dist[ny][nx] > nd:
+                        dist[ny][nx] = nd
+                        q.append((nx, ny))
+            avoid = {
+                (
+                    int((px + (WALL_OFFSET / 2)) // WALL_OFFSET),
+                    int((py + (WALL_OFFSET / 2)) // WALL_OFFSET),
+                ),
+                (ex, ey),
+            }
+            best = (start_tx, start_ty)
+            bestd = -1
             for yy in range(H):
                 for xx in range(W):
                     if mz[yy][xx] == 1:
@@ -424,33 +411,84 @@ async def main():
                     d = dist[yy][xx]
                     if d >= INF:
                         continue
+                    if (xx, yy) in avoid:
+                        continue
                     if d > bestd:
                         bestd = d
                         best = (xx, yy)
+            if bestd < 0:
+                for yy in range(H):
+                    for xx in range(W):
+                        if mz[yy][xx] == 1:
+                            continue
+                        d = dist[yy][xx]
+                        if d >= INF:
+                            continue
+                        if d > bestd:
+                            bestd = d
+                            best = (xx, yy)
+            return best
 
-        return best
+        g1_tx = int((gx + (WALL_OFFSET / 2)) // WALL_OFFSET)
+        g1_ty = int((gy + (WALL_OFFSET / 2)) // WALL_OFFSET)
+        g2_tx, g2_ty = find_farthest_walkable_from(g1_tx, g1_ty)
+        ghost2_x = g2_tx * WALL_OFFSET
+        ghost2_y = g2_ty * WALL_OFFSET
+        ghost2 = em.create_entity()
+        em.add_component(ghost2, Position(ghost2_x, ghost2_y))
+        em.add_component(ghost2, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
 
-    g1_tx = int((ghost_x + (WALL_OFFSET / 2)) // WALL_OFFSET)
-    g1_ty = int((ghost_y + (WALL_OFFSET / 2)) // WALL_OFFSET)
-    g2_tx, g2_ty = find_farthest_walkable_from(g1_tx, g1_ty)
+        player = em.create_entity()
+        em.add_component(player, Position(px, py))
+        em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
 
-    ghost2_x = g2_tx * WALL_OFFSET
-    ghost2_y = g2_ty * WALL_OFFSET
+        try:
+            if not pygame.mixer.music.get_busy():
+                pygame.mixer.music.play(-1)
+        except Exception:
+            pass
+        return em, ren_sys, mz, mz_entities, player, ghost, ghost2, px, py, gx, gy, ex, ey
 
-    ghost2 = em.create_entity()
-    em.add_component(ghost2, Position(ghost2_x, ghost2_y))
-    em.add_component(ghost2, Renderable(pygame.image.load(GHOST_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+    def reset_game():
+        nonlocal is_door_unlocked, preseed_buttons, hide_bar_curent, hiden_tick, is_hidden, active_msg, msg_start_time, rage_mode, rage_target_tile, ghost_next_step_ms, ghost2_next_step_ms, ghost_targeting, ghost_slide, roam_dir, scatter_index, last_known_player_tile
+        is_door_unlocked = True
+        preseed_buttons = 0
+        hide_bar_curent = hide_bar_max
+        hiden_tick = 0
+        is_hidden = False
+        active_msg = ""
+        msg_start_time = 0
+        rage_mode = False
+        rage_target_tile = None
+        ghost_next_step_ms = 0
+        ghost2_next_step_ms = 0
+        ghost_targeting = False
+        (em_, ren_sys_, mz_, mz_entities_, player_, ghost_, ghost2_, player_x_, player_y_, ghost_x_, ghost_y_, exit_x_, exit_y_) = build_world(total_buttons)
+        # Update all references
+        nonlocal em, ren_sys, mz, mz_entities, player, ghost, ghost2, player_x, player_y, ghost_x, ghost_y, exit_x, exit_y
+        em = em_
+        ren_sys = ren_sys_
+        mz = mz_
+        mz_entities = mz_entities_
+        player = player_
+        ghost = ghost_
+        ghost2 = ghost2_
+        player_x = player_x_
+        player_y = player_y_
+        ghost_x = ghost_x_
+        ghost_y = ghost_y_
+        exit_x = exit_x_
+        exit_y = exit_y_
+        ghost_slide = {
+            ghost: {"moving": False, "target": (0.0, 0.0)},
+            ghost2: {"moving": False, "target": (0.0, 0.0)},
+        }
+        roam_dir = {ghost: (0, 0), ghost2: (0, 0)}
+        scatter_index = {ghost: 1, ghost2: 2}
+        last_known_player_tile = None
 
-    player = em.create_entity()
-    em.add_component(player, Position(player_x, player_y))
-    em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
-
-    # play bgm (already started in the audio setup try-block)
-    try:
-        if not pygame.mixer.music.get_busy():
-            pygame.mixer.music.play(-1)
-    except Exception:
-        pass
+    # Initialize world/entities
+    (em, ren_sys, mz, mz_entities, player, ghost, ghost2, player_x, player_y, ghost_x, ghost_y, exit_x, exit_y) = build_world(total_buttons)
 
     # Ghost AI (normal / rage)
 
@@ -760,7 +798,8 @@ async def main():
                     return
 
                 if start_btn.is_pressed(event, v_mouse):
-                    scene = GAME_SCENE_STR
+                    reset_game()
+                    switch_scene(GAME_SCENE_STR)
                 elif quit_btn.is_pressed(event, v_mouse):
                     return
             
@@ -781,9 +820,8 @@ async def main():
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     return
-                
                 if return_btn.is_pressed(event, v_mouse):
-                    scene = MENU_SCENE_STR
+                    switch_to_menu()
 
             virtual_surface.fill((0, 255, 0))
             
@@ -823,7 +861,7 @@ async def main():
 
             # After the scene length, return to menu
             if now_ms - js_scene_start_ms >= js_scene_length_ms:
-                scene = MENU_SCENE_STR
+                switch_to_menu()
 
             # Handle quit events
             for event in pygame.event.get():
@@ -958,7 +996,7 @@ async def main():
 
             # Win condition: touching the door after it's unlocked
             if preseed_buttons == total_buttons and player_tile == (exit_x, exit_y):
-                scene = WIN_SCENE_STR
+                switch_to_win()
                 continue
 
             if rage_mode:
@@ -1041,7 +1079,7 @@ async def main():
                 if not is_hidden:
                     trigger_jumpscare()
                     js_scene_start_ms = pygame.time.get_ticks()
-                    scene = JS_SCENE_STR
+                    switch_to_js()
                     continue
 
             # Jumpscare lifetime
