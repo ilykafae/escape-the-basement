@@ -30,7 +30,7 @@ MOVE_INITIAL_DELAY_MS = 200
 MOVE_REPEAT_MS = 90
 
 TOTAL_BUTTONS = 1
-NUM_GHOSTS = 3 # 1 or 2
+NUM_GHOSTS = 2 # 1 or 2
 
 FOG_RADIUS_MATCH_LOCK = True
 
@@ -58,7 +58,7 @@ MSG_DURATION_MS = 3000
 # Font
 FONT_SIZE = 75
 
-HIDDEN_RECHARGE_MULTIPLIER = 3 / 20
+HIDDEN_RECHARGE_MULTIPLIER = 1 / 40
 
 # Audio volumes
 BGM_VOLUME = 0.5
@@ -78,6 +78,7 @@ BUTTON_PRESSED_PATH = "assets/world/button_pressed.png"
 PLAYER_PATH = "assets/sprite/char.png"
 PLAYER_RIGHT_PATH = "assets/sprite/char_right.png"
 PLAYER_LEFT_PATH = "assets/sprite/char_left.png"
+PLAYER_CRAWL_PATH = "assets/sprite/crawling.png"
 
 BGM_PATH = asset_path("assets/audio/bgm.ogg")
 RAGE_BGM_PATH = asset_path("assets/audio/rage_audio.ogg")
@@ -224,9 +225,19 @@ async def main():
 
     clock = pygame.time.Clock()
 
-    # Preload frequently-used UI/interaction sprites so keypresses can't crash on file load
+    # Preload frequently-used sprites so keypresses can't crash on file load
     IMG_BUTTON_PRESSED = pygame.image.load(BUTTON_PRESSED_PATH).convert_alpha()
     IMG_DOOR = pygame.image.load(DOOR_PATH).convert_alpha()
+
+    # Keep player sprites exactly tile-sized to prevent sudden scaling when swapping surfaces
+    IMG_PLAYER = pygame.transform.smoothscale(
+        pygame.image.load(PLAYER_PATH).convert_alpha(),
+        (WALL_OFFSET, WALL_OFFSET),
+    )
+    IMG_PLAYER_CRAWL = pygame.transform.smoothscale(
+        pygame.image.load(PLAYER_CRAWL_PATH).convert_alpha(),
+        (WALL_OFFSET, WALL_OFFSET),
+    )
 
     # --- audio setup ---
     def set_music(path: str) -> None:
@@ -482,7 +493,7 @@ async def main():
         # player
         player = em.create_entity()
         em.add_component(player, Position(px, py))
-        em.add_component(player, Renderable(pygame.image.load(PLAYER_PATH).convert_alpha(), WALL_OFFSET, WALL_OFFSET))
+        em.add_component(player, Renderable(IMG_PLAYER, WALL_OFFSET, WALL_OFFSET))
 
         return em, ren_sys, mz, mz_entities, player, ghost, ghost2, px, py, gx, gy, ex, ey
 
@@ -1003,6 +1014,8 @@ async def main():
                     elif event.key == pygame.K_q:
                         if hide_bar_curent > 0:
                             is_hidden = not is_hidden
+                            pc = em.entities[player][Renderable]
+                            pc.surface = IMG_PLAYER_CRAWL if is_hidden else IMG_PLAYER
                             hiden_tick = dt
 
                 elif event.type == pygame.KEYUP:
@@ -1032,6 +1045,7 @@ async def main():
                 hide_bar_curent = max(hide_bar_curent - dt, 0)
                 if hide_bar_curent == 0:
                     is_hidden = False
+                    em.entities[player][Renderable].surface = IMG_PLAYER
             else:
                 if hide_bar_curent < hide_bar_max:
                     hide_bar_curent = min(hide_bar_curent + (dt * HIDDEN_RECHARGE_MULTIPLIER), hide_bar_max)
