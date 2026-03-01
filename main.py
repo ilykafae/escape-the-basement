@@ -57,6 +57,8 @@ MSG_DURATION_MS = 3000
 # Font
 FONT_SIZE = 75
 
+HIDDEN_RECHARGE_MULTIPLIER = 3 / 20
+
 # Audio volumes
 BGM_VOLUME = 0.5
 RAGE_BGM_VOLUME = 1
@@ -871,7 +873,7 @@ async def main():
                             next_move_time = now + MOVE_INITIAL_DELAY_MS
 
                     # Button press (H) and legacy key (F) do the same thing
-                    elif event.key in (pygame.K_f, pygame.K_h):
+                    elif event.key in (pygame.K_f, pygame.K_h) and not is_hidden:
                         x = int((components[Position].x + (WALL_OFFSET / 2)) // WALL_OFFSET)
                         y = int((components[Position].y + (WALL_OFFSET / 2)) // WALL_OFFSET)
 
@@ -939,9 +941,10 @@ async def main():
                 hide_bar_curent = max(hide_bar_curent - dt, 0)
                 if hide_bar_curent == 0:
                     is_hidden = False
+                    set_targeting(true)
             else:
                 if hide_bar_curent < hide_bar_max:
-                    hide_bar_curent = min(hide_bar_curent + dt, hide_bar_max)
+                    hide_bar_curent = min(hide_bar_curent + (dt * HIDDEN_RECHARGE_MULTIPLIER), hide_bar_max)
 
             # =========================
             # Ghost update (movement + targeting + catch)
@@ -1035,10 +1038,11 @@ async def main():
 
             # Catch condition -> go to jumpscare scene
             if tile_of_entity(ghost) == player_tile or tile_of_entity(ghost2) == player_tile:
-                trigger_jumpscare()
-                js_scene_start_ms = pygame.time.get_ticks()
-                scene = JS_SCENE_STR
-                continue
+                if not is_hidden:
+                    trigger_jumpscare()
+                    js_scene_start_ms = pygame.time.get_ticks()
+                    scene = JS_SCENE_STR
+                    continue
 
             # Jumpscare lifetime
             if jumpscare_active and (now_ms - jumpscare_start_ms >= jumpscare_duration_ms):
