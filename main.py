@@ -13,7 +13,7 @@ V_GAME_H = 1450
 BASE_DIR = Path(__file__).resolve().parent
 
 def asset_path(rel: str) -> str:
-    return str(BASE_DIR / rel)
+    return str(BASE_DIR / rel)  
 
 
 USE_FOG_OF_WAR = True
@@ -66,7 +66,7 @@ RAGE_BGM_VOLUME = 1
 HEARTBEAT_VOLUME = 1.0
 JUMPSCARE_VOLUME = 0.9
 
-GHOST_PATH = "assets/sprite/ghost.jpg"
+GHOST_PATH = "assets/sprite/ghost.jpeg"
 WALL_PATH = "assets/world/wall.png"
 B_WALL_PATH = "assets/world/wall_with_blood.png"
 FLOOR_PATH = "assets/world/floor.png"
@@ -86,14 +86,7 @@ HEARTBEAT_PATH = asset_path("assets/audio/heartbeat.ogg")
 JUMPSCARE_AUDIO_PATH = asset_path("assets/audio/jumpscare_scream.ogg")
 
 # try common jumpscare filename variants
-JUMPSCARE_IMG_CANDIDATES = [
-    asset_path("assets/sprite/jumpscar.JPG"),
-    asset_path("assets/sprite/jumpscar.jpg"),
-    asset_path("assets/sprite/jumpscare.JPG"),
-    asset_path("assets/sprite/jumpscare.jpg"),
-    asset_path("assets/sprite/jumpscar.JPEG"),
-    asset_path("assets/sprite/jumpscare.JPEG"),
-]
+JUMPSCARE_IMG = [asset_path("assets/sprite/jumpscare.jpeg"),]
 
 FONT_PATH = 'assets/fonts/redcap.ttf'
 MC_FONT_PATH = "assets/fonts/minecraft.ttf"
@@ -280,14 +273,14 @@ async def main():
     jumpscare_channel = pygame.mixer.Channel(2) if AUDIO_OK else None
 
     # jumpscare visuals (audio length unchanged)
-    jumpscare_img = None
-    for p in JUMPSCARE_IMG_CANDIDATES:
+    JUMPSCARE_IMG = None
+    for p in JUMPSCARE_IMG:
         try:
             if Path(p).exists():
-                jumpscare_img = pygame.image.load(p).convert_alpha()
+                JUMPSCARE_IMG = pygame.image.load(p).convert_alpha()
                 break
         except Exception:
-            jumpscare_img = None
+            JUMPSCARE_IMG = None
 
     jumpscare_active = False
     jumpscare_start_ms = 0
@@ -906,16 +899,16 @@ async def main():
             ren_sys.render(em)
 
             # Full black cover + jumpscare image
-            if jumpscare_img is not None:
+            if JUMPSCARE_IMG is not None:
                 cover = pygame.Surface((V_GAME_W, V_GAME_H))
                 cover.fill((0, 0, 0))
                 virtual_surface.blit(cover, (0, 0))
 
-                iw, ih = jumpscare_img.get_size()
+                iw, ih = JUMPSCARE_IMG.get_size()
                 if iw > 0 and ih > 0:
                     scale = V_GAME_H / ih
                     nw, nh = int(iw * scale), V_GAME_H
-                    overlay = pygame.transform.smoothscale(jumpscare_img, (nw, nh)).convert_alpha()
+                    overlay = pygame.transform.smoothscale(JUMPSCARE_IMG, (nw, nh)).convert_alpha()
                     ox = (V_GAME_W - nw) // 2
                     virtual_surface.blit(overlay, (ox, 0))
 
@@ -1165,7 +1158,7 @@ async def main():
                 virtual_surface.blit(fog_surface, (0, 0))
 
             # Jumpscare overlay
-            if jumpscare_active and jumpscare_img is not None:
+            if jumpscare_active and JUMPSCARE_IMG is not None:
                 a = jumpscare_alpha(pygame.time.get_ticks())
                 if a > 0:
                     cover = pygame.Surface((V_GAME_W, V_GAME_H))
@@ -1173,11 +1166,11 @@ async def main():
                     cover.set_alpha(a)
                     virtual_surface.blit(cover, (0, 0))
 
-                    iw, ih = jumpscare_img.get_size()
+                    iw, ih = JUMPSCARE_IMG.get_size()
                     if iw > 0 and ih > 0:
                         scale = V_GAME_H / ih
                         nw, nh = int(iw * scale), V_GAME_H
-                        overlay = pygame.transform.smoothscale(jumpscare_img, (nw, nh)).convert_alpha()
+                        overlay = pygame.transform.smoothscale(JUMPSCARE_IMG, (nw, nh)).convert_alpha()
                         overlay.set_alpha(a)
                         ox = (V_GAME_W - nw) // 2
                         virtual_surface.blit(overlay, (ox, 0))
